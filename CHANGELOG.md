@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.2
+- Release pipeline: reproducible zip builds and correct registry publish
+  fields. No changes to the plugin itself.
+
 ## 1.9.1
 - Fix a crash on load (wrong Qt attribute name for click-through).
 

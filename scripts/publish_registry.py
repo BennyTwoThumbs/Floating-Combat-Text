@@ -33,24 +33,20 @@ def main() -> None:
     ap.add_argument("--url", required=True)
     ap.add_argument("--sha256", required=True)
     ap.add_argument("--requires-sdk", default=">=1.0,<2")
-    ap.add_argument("--min-app-version", default="")
-    ap.add_argument("--notes", default="")
     ap.add_argument("--token", default=os.environ.get("NPARSE_REGISTRY_TOKEN", ""))
     args = ap.parse_args()
 
     if not args.token:
         sys.exit("no token: pass --token or set NPARSE_REGISTRY_TOKEN")
 
+    # Field names verified against the registry's 422 response:
+    # artifact_url / artifact_sha256 / sdk_specifier / version.
     payload: dict[str, object] = {
         "version": args.version,
-        "url": args.url,
-        "sha256": args.sha256,
-        "requires_sdk": args.requires_sdk,
+        "artifact_url": args.url,
+        "artifact_sha256": args.sha256,
+        "sdk_specifier": args.requires_sdk,
     }
-    if args.min_app_version:
-        payload["min_app_version"] = args.min_app_version
-    if args.notes:
-        payload["notes"] = args.notes
 
     req = urllib.request.Request(
         f"{BASE}/plugins/{args.id}/releases",

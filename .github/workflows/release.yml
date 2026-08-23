@@ -41,11 +41,14 @@ jobs:
             exit 1
           fi
 
-      - name: Build zip
+      - name: Build zip (reproducible)
         id: build
         run: |
           NAME="floating-combat-text-${{ steps.meta.outputs.version }}.zip"
-          zip -r "$NAME" combat_text -x '*/__pycache__/*'
+          # Deterministic archive: fixed mtimes, sorted order, no extra attrs,
+          # so the same source always hashes to the same value (re-runs included).
+          find combat_text -type f ! -path '*__pycache__*' -exec touch -d '2020-01-01T00:00:00Z' {} +
+          find combat_text -type f ! -path '*__pycache__*' | LC_ALL=C sort | TZ=UTC zip -X -q "$NAME" -@
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
@@ -70,6 +73,7 @@ jobs:
 
       - name: Announce to registry
         if: env.HAS_TOKEN == 'true'
+        continue-on-error: true
         env:
           NPARSE_REGISTRY_TOKEN: ${{ secrets.NPARSE_REGISTRY_TOKEN }}
         run: |
