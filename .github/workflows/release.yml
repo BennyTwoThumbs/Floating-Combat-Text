@@ -1,0 +1,82 @@
+name: release
+
+# Tag a version (e.g. `git tag v1.9.1 && git push --tags`) and this:
+#   1. checks the tag matches the version in combat_text/__init__.py
+#   2. builds floating-combat-text-<version>.zip (one top-level entry: combat_text/)
+#   3. creates a GitHub Release with that zip
+#   4. regenerates index.json (the auto-update feed) and commits it to main
+#   5. announces the release to the registry IF the NPARSE_REGISTRY_TOKEN secret is set
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.NPARSE_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag matches meta.version
+        id: meta
+        run: |
+          VERSION="$(python scripts/read_version.py)"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match meta.version $VERSION"
+            exit 1
+          fi
+
+      - name: Build zip
+        id: build
+        run: |
+          NAME="floating-combat-text-${{ steps.meta.outputs.version }}.zip"
+          zip -r "$NAME" combat_text -x '*/__pycache__/*'
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build.outputs.name }}
+          body_path: CHANGELOG.md
+
+      - name: Regenerate and commit index.json
+        run: |
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.build.outputs.name }}"
+          python scripts/update_index.py \
+            --version "${{ steps.meta.outputs.version }}" \
+            --url "$URL" \
+            --sha256 "${{ steps.build.outputs.sha256 }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.json
+          git commit -m "chore: index.json for ${{ github.ref_name }}" || echo "index.json unchanged"
+          git push origin HEAD:main
+
+      - name: Announce to registry
+        if: env.HAS_TOKEN == 'true'
+        env:
+          NPARSE_REGISTRY_TOKEN: ${{ secrets.NPARSE_REGISTRY_TOKEN }}
+        run: |
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.build.outputs.name }}"
+          python scripts/publish_registry.py \
+            --id floating-combat-text \
+            --version "${{ steps.meta.outputs.version }}" \
+            --url "$URL" \
+            --sha256 "${{ steps.build.outputs.sha256 }}" \
+            --requires-sdk ">=1.0,<2"

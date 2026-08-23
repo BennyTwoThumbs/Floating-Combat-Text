@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "floating-combat-text",
+      "name": "Floating Combat Text",
+      "latest": {
+        "version": "1.9.1",
+        "url": "https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/download/v1.9.1/floating-combat-text-1.9.1.zip",
+        "sha256": "1bcd00c4a338d3e19e79c26aa7141d21b8fa48d8157220ec91c8de0053ddebb7",
+        "requires_sdk": ">=1.0,<2"
+      }
+    }
+  ]
+}
