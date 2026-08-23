@@ -7,7 +7,7 @@
       "latest": {
         "version": "1.9.1",
         "url": "https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/download/v1.9.1/floating-combat-text-1.9.1.zip",
-        "sha256": "04fe65cb4dff572ed50c7f0abf532259a0ff6d9882beb365a2bf929a015458e9",
+        "sha256": "fa2855f45c9d801339718a58e7216a58d9c9c0f52a8749c484a7f019620893ee",
         "requires_sdk": ">=1.0,<2"
       }
     }
