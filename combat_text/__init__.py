@@ -54,6 +54,18 @@ __all__ = ["CombatTextPlugin", "create_plugin", "DEFAULTS"]
 # the cap only matters if the window is closed while combat rages on.
 MAX_PENDING = 400
 
+# Damage verbs that count as special attacks and get a label. The host's
+# DamageEvent carries "backstab" for your hits and "backstabs" for others',
+# so both forms map to the display word.
+SPECIAL_VERBS = {
+    "backstab": "backstab",
+    "backstabs": "backstab",
+    "bash": "bash",
+    "bashes": "bash",
+    "kick": "kick",
+    "kicks": "kick",
+}
+
 # Every tunable, with its default. This is the whole schema: the settings page
 # reads and writes these keys, the overlay reads them each frame, and they are
 # saved verbatim through ``ctx.storage``. Colours are [r, g, b]; x/y are
@@ -130,6 +142,10 @@ DEFAULTS: dict[str, Any] = {
     "vspread_pct": 10,      # vertical spread (% of window) so stacked hits separate
     "setup_on_open": False,  # guides still appear once on a true first run
     "auto_show": True,       # open the overlay on launch without a tray visit
+    # special-attack labels ("backstab 250", "Crippling Blow 312!") drawn
+    # above the number; toggle off for bare numbers.
+    "show_special_labels": True,
+    "label_size": 12,
     "spawn_pop": True,      # numbers pop in (scale up then settle)
     "click_through": True,  # when NOT in setup mode, let clicks pass to the game
     # Miss/avoidance ticks get their own two lanes so they can be placed apart
@@ -153,7 +169,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.10.1",
+        version="1.11.0",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -173,14 +189,16 @@ class CombatTextPlugin(NParsePlugin):
         # The driver thread writes _pending and _pet_name; the GUI thread reads
         # them. Neither is touched off this lock.
         self._lock = threading.Lock()
-        # Each entry is (kind, text, amount). amount drives sizing/big-hit;
-        # amount 0 marks a miss/avoidance tick whose word is in text.
-        self._pending: deque[tuple[str, str, int]] = deque(maxlen=MAX_PENDING)
+        # Each entry is (kind, text, amount, label). amount drives sizing/
+        # big-hit; amount 0 marks a miss/avoidance tick whose word is in text;
+        # label is a special-attack word drawn above the number ("" = none).
+        self._pending: deque[tuple[str, str, int, str]] = deque(maxlen=MAX_PENDING)
         self._pet_name: str = ""
         # Crit announcements ("<name> Scores a critical hit!(49)") arrive just
-        # BEFORE their damage line. Each entry is (amount, monotonic time); an
-        # outgoing hit matching one within 1.5 s renders with a trailing "!".
-        self._crits: deque[tuple[int, float]] = deque(maxlen=8)
+        # BEFORE their damage line. Each entry is (amount, monotonic time,
+        # label); a matching outgoing hit within 1.5 s gets a trailing "!"
+        # and, for Crippling Blows, the label.
+        self._crits: deque[tuple[int, float, str]] = deque(maxlen=8)
         # Settings live here and are only ever touched on the GUI thread (the
         # settings page and the overlay's own drags/paints). The driver-thread
         # callbacks never read them.
@@ -275,18 +293,21 @@ class CombatTextPlugin(NParsePlugin):
         miss_in = _re.compile(r"^[\w`'\-. ]+? tries to \w+ YOU, but (?P<rest>.+)")
         avoid_word = _re.compile(r"\b(dodge|parr|riposte|block|absorb)", _re.IGNORECASE)
         # e.g. "Forsure Scores a critical hit!(49)" / "You deliver a critical blast!(196)"
+        # / "Forsure lands a Crippling Blow!(312)"
         crit_re = _re.compile(
-            r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!|delivers? a critical blast!)"
+            r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
+            r"|delivers? a critical blast!|lands? a Crippling Blow!)"
             r"\s*\((?P<d>\d+)\)",
             _re.IGNORECASE,
         )
 
         def on_line(ev: Any) -> None:
             msg = getattr(ev, "line", "") or ""
-            if "critical" in msg:
+            if "critical" in msg or "rippling" in msg:
                 m = crit_re.match(msg)
                 if m:
-                    self._record_crit(m.group("n"), int(m.group("d")))
+                    label = "Crippling Blow" if "rippling" in msg else ""
+                    self._record_crit(m.group("n"), int(m.group("d")), label)
                     return
             if "non-melee" in msg:
                 m = self_ds.match(msg)
@@ -358,7 +379,8 @@ class CombatTextPlugin(NParsePlugin):
         miss_in = re.compile(r"^[\w`'\-. ]+? tries to \w+ YOU, but (?P<rest>.+)")
         avoid_word = re.compile(r"\b(dodge|parr|riposte|block|absorb)", re.IGNORECASE)
         crit_re = re.compile(
-            r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!|delivers? a critical blast!)"
+            r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
+            r"|delivers? a critical blast!|lands? a Crippling Blow!)"
             r"\s*\((?P<d>\d+)\)",
             re.IGNORECASE,
         )
@@ -375,10 +397,11 @@ class CombatTextPlugin(NParsePlugin):
             msg = getattr(ev, "line", "") or ""
             if not msg:
                 return
-            if "critical" in msg:
+            if "critical" in msg or "rippling" in msg:
                 m = crit_re.match(msg)
                 if m:
-                    self._record_crit(m.group("n"), int(m.group("d")))
+                    label = "Crippling Blow" if "rippling" in msg else ""
+                    self._record_crit(m.group("n"), int(m.group("d")), label)
                     return
             m = pet_id.match(msg)
             if m:
@@ -453,17 +476,20 @@ class CombatTextPlugin(NParsePlugin):
             else:
                 return
         text = str(amount)
+        label = SPECIAL_VERBS.get(dt, "")
         with self._lock:
             if kind in ("out", "outns", "pet"):
                 now = time.monotonic()
-                for i, (crit_amount, ts) in enumerate(self._crits):
+                for i, (crit_amount, ts, crit_label) in enumerate(self._crits):
                     if crit_amount == amount and now - ts <= 1.5:
                         del self._crits[i]
                         text += "!"
+                        if crit_label:
+                            label = crit_label
                         break
-            self._pending.append((kind, text, amount))
+            self._pending.append((kind, text, amount, label))
 
-    def _record_crit(self, actor: str, amount: int) -> None:
+    def _record_crit(self, actor: str, amount: int, label: str = "") -> None:
         """Remember a crit announcement so the matching hit gets its '!'.
 
         Other players' crits are broadcast too, so only keep announcements
@@ -479,13 +505,13 @@ class CombatTextPlugin(NParsePlugin):
             pet = self._pet_name.strip().lower()
             if me and who not in ("you", me, pet):
                 return
-            self._crits.append((amount, time.monotonic()))
+            self._crits.append((amount, time.monotonic(), label))
 
     def _record_miss(self, side: str, word: str) -> None:
         """Queue an avoidance tick ('miss'/'dodge'/…) into its own lane
         ("outmiss"/"inmiss"); the lane's enable toggle governs visibility."""
         with self._lock:
-            self._pending.append((f"{side}miss", word, 0))
+            self._pending.append((f"{side}miss", word, 0, ""))
 
     # --- GUI thread reads --------------------------------------------------
     def drain(self) -> list[tuple[str, str, int]]:

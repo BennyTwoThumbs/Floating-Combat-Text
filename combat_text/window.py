@@ -125,6 +125,7 @@ class _Num:
     dx: float         # travel direction, x component (+right)
     dy: float         # travel direction, y component (+down)
     rise: float       # travel distance over the number's life (fraction)
+    label: str        # special-attack word drawn above the number ("" = none)
 
 
 class CombatTextWindow(PluginWindow):
@@ -178,8 +179,10 @@ class CombatTextWindow(PluginWindow):
             "outmiss": (("miss", "riposte", "dodge")[wave], 0),
             "inmiss": (("dodge", "miss", "parry")[wave], 0),
         }
+        # wave 1 shows a special-attack label, wave 2 a Crippling Blow crit
+        labels = {0: {"out": "backstab"}, 1: {"out": "Crippling Blow"}, 2: {"pet": "bash"}}
         for kind, (text, amount) in waves.items():
-            self._spawn(text, amount, kind)
+            self._spawn(text, amount, kind, labels.get(wave, {}).get(kind, ""))
 
     def _sync_click_through(self) -> None:
         """Locked + click_through setting => pass clicks through to the game.
@@ -194,11 +197,11 @@ class CombatTextWindow(PluginWindow):
         # Picks up live changes to the click_through setting and setup toggles.
         self._sync_click_through()
         if self.isVisible():
-            for kind, text, amount in self._plugin.drain():
-                self._spawn(text, amount, kind)
+            for kind, text, amount, label in self._plugin.drain():
+                self._spawn(text, amount, kind, label)
         self.update()
 
-    def _spawn(self, text: str, amount: int, kind: str) -> None:
+    def _spawn(self, text: str, amount: int, kind: str, label: str = "") -> None:
         p = self._plugin
         if not p.get(f"enabled_{kind}"):
             return
@@ -234,6 +237,7 @@ class CombatTextWindow(PluginWindow):
                 dx=dx,
                 dy=dy,
                 rise=rise,
+                label=label if p.get("show_special_labels") else "",
             )
         )
         if len(self._nums) > MAX_NUMS:
@@ -245,6 +249,7 @@ class CombatTextWindow(PluginWindow):
         lifetime_ms = max(200.0, float(p.get("lifetime_s")) * 1000.0)
         big_color = tuple(p.get("big_color") or (255, 140, 0))
         pop = bool(p.get("spawn_pop"))
+        label_size = max(6, int(p.get("label_size") or 12))
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -269,6 +274,19 @@ class CombatTextWindow(PluginWindow):
             else:
                 alpha = max(0.0, 1.0 - (t - FADE_START) / (1.0 - FADE_START))
             size = max(6, int(n.size * _pop_scale(age_ms))) if pop else n.size
+            if n.label:
+                # sits just above the number, in the lane's colour
+                self._draw_number(
+                    painter,
+                    n.label,
+                    x_px,
+                    y_px - size * 0.85,
+                    label_size,
+                    (n.r, n.g, n.b),
+                    alpha,
+                    False,
+                    big_color,
+                )
             self._draw_number(
                 painter, n.text, x_px, y_px, size, (n.r, n.g, n.b), alpha, n.big, big_color
             )
@@ -705,6 +723,15 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     ct.setObjectName("click_through")
     ct.setChecked(bool(values.get("click_through", True)))
     mform.addRow(ct)
+    labels_cb = QCheckBox(
+        "Label special attacks (backstab, bash, kick, Crippling Blow)", motion
+    )
+    labels_cb.setObjectName("show_special_labels")
+    labels_cb.setChecked(bool(values.get("show_special_labels", True)))
+    mform.addRow(labels_cb)
+    mform.addRow(
+        "Label size (px)", _spin("label_size", 6, 48, int(values.get("label_size", 12)), motion)
+    )
     auto = QCheckBox("Open the overlay automatically when nParse+ starts", motion)
     auto.setObjectName("auto_show")
     auto.setChecked(bool(values.get("auto_show", True)))
@@ -725,7 +752,7 @@ def read_settings_page(page: QWidget) -> dict:
         "enabled_out", "enabled_outns", "enabled_pet", "enabled_in", "enabled_inns",
         "enabled_outheal", "enabled_inheal", "enabled_outmiss", "enabled_inmiss",
         "scale_with_damage", "spawn_pop", "click_through", "setup_on_open",
-        "auto_show",
+        "auto_show", "show_special_labels",
     ):
         w = page.findChild(QCheckBox, name)
         if w is not None:
@@ -735,7 +762,7 @@ def read_settings_page(page: QWidget) -> dict:
         "size_outheal", "size_inheal", "size_outmiss", "size_inmiss",
         "dist_out", "dist_outns", "dist_pet", "dist_in", "dist_inns",
         "dist_outheal", "dist_inheal", "dist_outmiss", "dist_inmiss",
-        "big_threshold", "jitter_pct", "vspread_pct",
+        "big_threshold", "jitter_pct", "vspread_pct", "label_size",
     ):
         w = page.findChild(QSpinBox, name)
         if w is not None:

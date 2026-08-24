@@ -34,7 +34,9 @@ sends anything anywhere.
 Each lane has its own colour, size, on/off toggle, travel direction (8-way),
 and travel distance. Big hits over a threshold get a coloured glow, and true
 crits (the "scores a critical hit!" line, filtered to your character and pet)
-render with a trailing `!` — `49!`. Layouts can be saved and shared as preset
+render with a trailing `!` — `49!`. Special attacks can label themselves above
+the number (`backstab 250`, `Crippling Blow 96!`) at their own font size, or be
+switched off entirely for bare numbers. Layouts can be saved and shared as preset
 JSON files (Save preset… / Load preset…). Everything is configurable in
 **Settings → Floating Combat Text**.
 

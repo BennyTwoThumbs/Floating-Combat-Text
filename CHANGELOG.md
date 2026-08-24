@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.11.0
+- Special-attack labels: backstabs, bashes, kicks and Crippling Blows draw
+  their name above the number (`backstab 250`, `Crippling Blow 96!`). Normal
+  swings stay bare. Crippling Blows are name-filtered like crits, so nearby
+  players can't trigger yours.
+- New settings: "Label special attacks" (on by default — untick for
+  numbers-only) and an independent "Label size (px)".
+
 ## 1.10.1
 - Setup mode: lane grab zones are much more forgiving (~36 px beyond the ring,
   label included; nearest ring wins), so near-misses no longer drag the whole
