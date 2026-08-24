@@ -21,9 +21,14 @@ sends anything anywhere.
 | Incoming non-melee | a mob's damage shield / nukes on you (`You were hit by non-melee`) |
 | Outgoing healing | heals you cast (`You have healed <name> for N`) |
 | Incoming healing | heals cast on you (`<name> has healed you for N`) |
+| Your misses / avoids | your whiffs and your dodge/parry/riposte/block (off by default) |
+| Enemy misses / avoids | the mob's whiffs and its dodge/parry/riposte/block (off by default) |
 
-Each lane has its own colour, size, on/off toggle, and travel direction (8-way).
-Big hits over a threshold get a coloured glow. Everything is configurable in
+Each lane has its own colour, size, on/off toggle, travel direction (8-way),
+and travel distance. Big hits over a threshold get a coloured glow, and true
+crits (the "scores a critical hit!" line, filtered to your character and pet)
+render with a trailing `!` — `49!`. Layouts can be saved and shared as preset
+JSON files (Save preset… / Load preset…). Everything is configurable in
 **Settings → Floating Combat Text**.
 
 ## Install (manual)

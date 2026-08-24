@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -44,7 +45,9 @@ FPS = 60
 FADE_START = 0.55       # fraction of life after which a number begins to fade
 MAX_NUMS = 120          # hard cap on numbers drawn at once
 
-LANE_KINDS = ("out", "outns", "pet", "in", "inns", "outheal", "inheal")
+LANE_KINDS = (
+    "out", "outns", "pet", "in", "inns", "outheal", "inheal", "outmiss", "inmiss"
+)
 HEAL_KINDS = ("outheal", "inheal")
 
 # The 8 travel directions: (key, menu label, dx, dy). dy is +down (screen
@@ -70,6 +73,8 @@ LANE_LABELS = {
     "inns": "INCOMING NON-MELEE",
     "outheal": "HEAL OUT",
     "inheal": "HEAL IN",
+    "outmiss": "YOUR MISSES",
+    "inmiss": "ENEMY MISSES",
 }
 # Friendlier labels for the settings-page rows.
 LANE_ROW_LABELS = {
@@ -80,6 +85,8 @@ LANE_ROW_LABELS = {
     "inns": "Incoming non-melee",
     "outheal": "Outgoing healing",
     "inheal": "Incoming healing",
+    "outmiss": "Your misses / avoids",
+    "inmiss": "Enemy misses / avoids",
 }
 
 
@@ -117,6 +124,7 @@ class _Num:
     big: bool         # big hit -> orange outline + extra size
     dx: float         # travel direction, x component (+right)
     dy: float         # travel direction, y component (+down)
+    rise: float       # travel distance over the number's life (fraction)
 
 
 class CombatTextWindow(PluginWindow):
@@ -126,7 +134,9 @@ class CombatTextWindow(PluginWindow):
         super().__init__(wctx)
         self._plugin = plugin
         self._nums: list[_Num] = []
-        self._setup = bool(plugin.get("setup_on_open"))
+        # Guides on open: when asked for every time, or once on a fresh
+        # install so lanes can be placed before any settings exist.
+        self._setup = bool(plugin.get("setup_on_open")) or plugin.first_run()
         self._drag_lane: str | None = None
         self._ct_applied: bool | None = None
 
@@ -139,6 +149,15 @@ class CombatTextWindow(PluginWindow):
         self._timer.setInterval(int(1000 / FPS))
         self._timer.timeout.connect(self._on_frame)
         self._timer.start()
+
+        # Come up on launch without a tray visit (opt-out via settings). A
+        # short delay lets the host finish restoring window state first.
+        if plugin.get("auto_show"):
+            QTimer.singleShot(600, self._auto_show)
+
+    def _auto_show(self) -> None:
+        if not self.isVisible():
+            self.show()
 
     def _sync_click_through(self) -> None:
         """Locked + click_through setting => pass clicks through to the game.
@@ -153,18 +172,23 @@ class CombatTextWindow(PluginWindow):
         # Picks up live changes to the click_through setting and setup toggles.
         self._sync_click_through()
         if self.isVisible():
-            for amount, kind in self._plugin.drain():
-                self._spawn(amount, kind)
+            for kind, text, amount in self._plugin.drain():
+                self._spawn(text, amount, kind)
         self.update()
 
-    def _spawn(self, amount: int, kind: str) -> None:
+    def _spawn(self, text: str, amount: int, kind: str) -> None:
         p = self._plugin
         if not p.get(f"enabled_{kind}"):
             return
-        size = float(p.get(f"size_{kind}"))
-        if p.get("scale_with_damage"):
-            size *= 1.0 + min(amount, 500) / 830.0
-        big = kind not in HEAL_KINDS and amount >= int(p.get("big_threshold"))
+        if amount <= 0:
+            # avoidance tick ("miss"/"dodge"/…): the lane's own size, never big
+            size = float(p.get(f"size_{kind}"))
+            big = False
+        else:
+            size = float(p.get(f"size_{kind}"))
+            if p.get("scale_with_damage"):
+                size *= 1.0 + min(amount, 500) / 830.0
+            big = kind not in HEAL_KINDS and amount >= int(p.get("big_threshold"))
         if big:
             size *= float(p.get("big_scale"))
         rgb = p.get(f"color_{kind}") or [255, 255, 255]
@@ -173,9 +197,10 @@ class CombatTextWindow(PluginWindow):
         x = float(p.get(f"x_{kind}")) + random.uniform(-jitter, jitter)
         y0 = float(p.get(f"y_{kind}")) + random.uniform(-vspread, vspread)
         dx, dy = DIR_VEC.get(p.get(f"dir_{kind}") or "up", (0.0, -1.0))
+        rise = float(p.get(f"dist_{kind}") or 42) / 100.0
         self._nums.append(
             _Num(
-                text=str(amount),
+                text=text,
                 r=int(rgb[0]),
                 g=int(rgb[1]),
                 b=int(rgb[2]),
@@ -186,6 +211,7 @@ class CombatTextWindow(PluginWindow):
                 big=big,
                 dx=dx,
                 dy=dy,
+                rise=rise,
             )
         )
         if len(self._nums) > MAX_NUMS:
@@ -195,7 +221,6 @@ class CombatTextWindow(PluginWindow):
     def paintEvent(self, event: Any) -> None:  # noqa: N802 (Qt override)
         p = self._plugin
         lifetime_ms = max(200.0, float(p.get("lifetime_s")) * 1000.0)
-        rise = float(p.get("rise_pct")) / 100.0
         big_color = tuple(p.get("big_color") or (255, 140, 0))
         pop = bool(p.get("spawn_pop"))
 
@@ -215,8 +240,8 @@ class CombatTextWindow(PluginWindow):
                 continue
             alive.append(n)
             t = age_ms / lifetime_ms
-            x_px = (n.x + n.dx * rise * t) * w
-            y_px = (n.y0 + n.dy * rise * t) * h
+            x_px = (n.x + n.dx * n.rise * t) * w
+            y_px = (n.y0 + n.dy * n.rise * t) * h
             if t <= FADE_START:
                 alpha = 1.0
             else:
@@ -278,20 +303,21 @@ class CombatTextWindow(PluginWindow):
 
         threshold = int(p.get("big_threshold"))
         samples = {
-            "out": max(threshold, 150),
-            "outns": 40,
-            "pet": 45,
-            "in": 67,
-            "inns": 3,
-            "outheal": 399,
-            "inheal": 438,
+            "out": str(max(threshold, 150)),
+            "outns": "40",
+            "pet": "45",
+            "in": "67",
+            "inns": "3",
+            "outheal": "399",
+            "inheal": "438",
+            "outmiss": "riposte",
+            "inmiss": "miss",
         }
         for kind in LANE_KINDS:
             enabled = bool(p.get(f"enabled_{kind}"))
             cx = float(p.get(f"x_{kind}")) * w
             cy = float(p.get(f"y_{kind}")) * h
             rgb = tuple(p.get(f"color_{kind}") or (255, 255, 255))
-            amount = samples[kind]
             # grab handle (matches the drag hit target exactly)
             r = _grab_radius(float(p.get(f"size_{kind}")))
             ring = QColor(*rgb, 90 if enabled else 35)
@@ -303,13 +329,13 @@ class CombatTextWindow(PluginWindow):
             painter.drawLine(int(cx), int(cy), int(cx + dx * 30), int(cy + dy * 30))
             self._draw_number(
                 painter,
-                str(amount),
+                samples[kind],
                 cx,
                 cy,
                 int(p.get(f"size_{kind}")),
                 rgb,
                 0.9 if enabled else 0.3,
-                big=(kind == "out" and amount >= threshold),
+                big=(kind == "out"),
                 big_color=big_color,
             )
             label = LANE_LABELS[kind] + ("" if enabled else "  (off)")
@@ -319,11 +345,21 @@ class CombatTextWindow(PluginWindow):
             painter.setPen(QColor(*rgb, 170 if enabled else 80))
             painter.drawText(int(cx) - 34, int(cy) + 30, label)
 
+        # clickable "hide guides" button (double-click also works, but a plain
+        # button survives the window-move swallowing the second click)
+        bx, by, bw, bh = self._hide_button_rect()
+        painter.setPen(QColor(255, 255, 255, 150))
+        painter.drawRect(bx, by, bw, bh)
         font = QFont()
         font.setPixelSize(11)
         painter.setFont(font)
+        painter.drawText(bx + 10, by + bh - 7, "hide guides")
         painter.setPen(QColor(255, 255, 255, 120))
-        painter.drawText(8, h - 8, "drag a lane to move it · double-click to hide this guide")
+        painter.drawText(bx + bw + 12, by + bh - 7, "drag a lane to move it")
+
+    def _hide_button_rect(self) -> tuple[int, int, int, int]:
+        """(x, y, w, h) of the hide-guides button, bottom-left corner."""
+        return (8, self.height() - 32, 86, 24)
 
     # --- interaction -------------------------------------------------------
     def _lane_at(self, px: float, py: float) -> str | None:
@@ -345,6 +381,13 @@ class CombatTextWindow(PluginWindow):
     def mousePressEvent(self, event: Any) -> None:  # noqa: N802 (Qt override)
         if self._setup and event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
+            bx, by, bw, bh = self._hide_button_rect()
+            if bx <= pos.x() <= bx + bw and by <= pos.y() <= by + bh:
+                self._setup = False
+                self._sync_click_through()
+                self.update()
+                event.accept()
+                return
             kind = self._lane_at(pos.x(), pos.y())
             if kind is not None:
                 self._drag_lane = kind
@@ -534,13 +577,55 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     buttons.addWidget(reset_btn)
     root.addLayout(buttons)
 
+    # --- presets: named layouts you can keep or share ----------------------
+    save_btn = QPushButton("Save preset…", page)
+    load_btn = QPushButton("Load preset…", page)
+
+    def _preset_default() -> str:
+        d = plugin.preset_dir() if plugin is not None else None
+        return str(d) if d else ""
+
+    def _save_preset() -> None:
+        if plugin is None:
+            return
+        base = _preset_default()
+        start = (base + "/my-layout.json") if base else "my-layout.json"
+        path, _f = QFileDialog.getSaveFileName(page, "Save preset", start, "JSON (*.json)")
+        if not path:
+            return
+        err = plugin.export_settings(path, read_settings_page(page))
+        if err:
+            QMessageBox.warning(page, "Floating Combat Text", f"Could not save preset:\n{err}")
+
+    def _load_preset() -> None:
+        if plugin is None:
+            return
+        path, _f = QFileDialog.getOpenFileName(
+            page, "Load preset", _preset_default(), "JSON (*.json)"
+        )
+        if not path:
+            return
+        err = plugin.import_settings(path)
+        if err:
+            QMessageBox.warning(page, "Floating Combat Text", f"Could not load preset:\n{err}")
+            return
+        _apply_values_to_page(page, plugin.settings())
+
+    save_btn.clicked.connect(_save_preset)
+    load_btn.clicked.connect(_load_preset)
+    presets_row = QHBoxLayout()
+    presets_row.addWidget(save_btn)
+    presets_row.addWidget(load_btn)
+    presets_row.addStretch(1)
+    root.addLayout(presets_row)
+
     # --- Lanes -------------------------------------------------------------
     lanes = QGroupBox("Lanes", page)
     grid = QGridLayout(lanes)
     grid.setHorizontalSpacing(14)
     grid.setVerticalSpacing(10)
     grid.setColumnStretch(4, 1)
-    for col, head in enumerate(("", "On", "Colour", "Size", "Move")):
+    for col, head in enumerate(("", "On", "Colour", "Size", "Move", "Travel %")):
         grid.addWidget(QLabel(head, lanes), 0, col)
     for row, kind in enumerate(LANE_KINDS, start=1):
         grid.addWidget(QLabel(LANE_ROW_LABELS[kind], lanes), row, 0)
@@ -557,14 +642,17 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         )
         grid.addWidget(_spin(f"size_{kind}", 8, 96, int(values.get(f"size_{kind}", 28)), lanes), row, 3)
         grid.addWidget(_dir_combo(f"dir_{kind}", str(values.get(f"dir_{kind}", "up")), lanes), row, 4)
+        grid.addWidget(
+            _spin(f"dist_{kind}", 0, 100, int(values.get(f"dist_{kind}", 42)), lanes), row, 5
+        )
     hint = QLabel(
-        "“Move” is the direction numbers drift; distance is set by Travel "
-        "distance under Motion. To position a lane, open the overlay in setup "
-        "mode and drag its ring — placements save automatically.",
+        "“Move” is the direction numbers drift; “Travel” is how far (percent "
+        "of the window). To position a lane, open the overlay in setup mode "
+        "and drag its ring — placements save automatically.",
         lanes,
     )
     hint.setWordWrap(True)
-    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 5)
+    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 6)
     root.addWidget(lanes)
 
     # --- Big hits ----------------------------------------------------------
@@ -579,7 +667,6 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     motion = QGroupBox("Motion and feel", page)
     mform = QFormLayout(motion)
     mform.addRow("Lifetime (sec)", _dspin("lifetime_s", 0.3, 6.0, 0.1, float(values.get("lifetime_s", 1.5)), motion))
-    mform.addRow("Travel distance (%)", _spin("rise_pct", 0, 100, int(values.get("rise_pct", 42)), motion))
     mform.addRow("Horizontal spread (%)", _spin("jitter_pct", 0, 50, int(values.get("jitter_pct", 8)), motion))
     mform.addRow("Vertical spread (%)", _spin("vspread_pct", 0, 60, int(values.get("vspread_pct", 10)), motion))
     scale = QCheckBox("Scale size with damage", motion)
@@ -594,9 +681,13 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     ct.setObjectName("click_through")
     ct.setChecked(bool(values.get("click_through", True)))
     mform.addRow(ct)
-    setup = QCheckBox("Show setup guides when the window opens", motion)
+    auto = QCheckBox("Open the overlay automatically when nParse+ starts", motion)
+    auto.setObjectName("auto_show")
+    auto.setChecked(bool(values.get("auto_show", True)))
+    mform.addRow(auto)
+    setup = QCheckBox("Show setup guides every time the window opens", motion)
     setup.setObjectName("setup_on_open")
-    setup.setChecked(bool(values.get("setup_on_open", True)))
+    setup.setChecked(bool(values.get("setup_on_open", False)))
     mform.addRow(setup)
     root.addWidget(motion)
 
@@ -608,16 +699,19 @@ def read_settings_page(page: QWidget) -> dict:
     out: dict[str, Any] = {}
     for name in (
         "enabled_out", "enabled_outns", "enabled_pet", "enabled_in", "enabled_inns",
-        "enabled_outheal", "enabled_inheal",
+        "enabled_outheal", "enabled_inheal", "enabled_outmiss", "enabled_inmiss",
         "scale_with_damage", "spawn_pop", "click_through", "setup_on_open",
+        "auto_show",
     ):
         w = page.findChild(QCheckBox, name)
         if w is not None:
             out[name] = bool(w.isChecked())
     for name in (
         "size_out", "size_outns", "size_pet", "size_in", "size_inns",
-        "size_outheal", "size_inheal",
-        "big_threshold", "rise_pct", "jitter_pct", "vspread_pct",
+        "size_outheal", "size_inheal", "size_outmiss", "size_inmiss",
+        "dist_out", "dist_outns", "dist_pet", "dist_in", "dist_inns",
+        "dist_outheal", "dist_inheal", "dist_outmiss", "dist_inmiss",
+        "big_threshold", "jitter_pct", "vspread_pct",
     ):
         w = page.findChild(QSpinBox, name)
         if w is not None:
@@ -630,7 +724,8 @@ def read_settings_page(page: QWidget) -> dict:
     # set by dragging in the overlay and would otherwise be clobbered on Apply.
     for name in (
         "color_out", "color_outns", "color_pet", "color_in", "color_inns",
-        "color_outheal", "color_inheal", "big_color",
+        "color_outheal", "color_inheal", "color_outmiss", "color_inmiss",
+        "big_color",
     ):
         w = page.findChild(QPushButton, name)
         if w is not None and hasattr(w, "rgb"):

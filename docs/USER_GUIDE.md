@@ -20,7 +20,8 @@ a labelled ring for every lane.
 1. Drag the window (empty space) so the **centre line** sits on your character.
 2. Drag each **lane's ring** to where you want its numbers to appear — they
    save automatically the moment you let go.
-3. **Double-click** the overlay to hide the guides. You're done.
+3. Click the **hide guides** button (bottom-left of the overlay) — or
+   double-click empty space. You're done.
 
 To move things again later: open the settings page (below) and click
 **Open overlay in setup mode**.
@@ -51,6 +52,13 @@ Positions aren't on this page — you set those by dragging in setup mode.
 | Incoming non-melee | a mob's damage shield / nukes on you |
 | Outgoing healing | heals you cast |
 | Incoming healing | heals cast on you |
+| Your misses / avoids | your whiffs + your dodge/parry/riposte/block (off by default) |
+| Enemy misses / avoids | the mob's whiffs + its avoids (off by default) |
+
+Crits show with a `!` after the number (`49!`). Each lane also has its own
+travel direction and distance. **Save preset… / Load preset…** on the settings
+page store complete layouts as JSON files you can keep or share with friends —
+loading one applies instantly, positions included.
 
 ## Quick controls
 
