@@ -1,5 +1,11 @@
 # Floating Combat Text
 
+[![Latest release](https://img.shields.io/github/v/release/BennyTwoThumbs/Floating-Combat-Text?label=latest&color=brightgreen)](https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BennyTwoThumbs/Floating-Combat-Text/total)](https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
+**[⬇ Download the latest version](https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/latest/download/floating-combat-text.zip)** — always the newest build. Or [browse all releases](https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/latest).
+
 MMO-style floating combat text for [nParse+](https://github.com/prokopto-dev/nparse-plus),
 the EverQuest Project 1999 overlay. Your hits, your pet, incoming damage,
 non-melee / damage-shields, and healing appear as colour-coded numbers that

@@ -51,11 +51,17 @@ jobs:
           find combat_text -type f ! -path '*__pycache__*' | LC_ALL=C sort | TZ=UTC zip -X -q "$NAME" -@
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # Same bytes under a stable name, so the URL
+          # releases/latest/download/floating-combat-text.zip always resolves
+          # to the newest build. index.json keeps the versioned URL.
+          cp "$NAME" floating-combat-text.zip
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.build.outputs.name }}
+          files: |
+            ${{ steps.build.outputs.name }}
+            floating-combat-text.zip
           body_path: CHANGELOG.md
 
       - name: Regenerate and commit index.json
