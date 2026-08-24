@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.1
+- Setup mode: lane grab zones are much more forgiving (~36 px beyond the ring,
+  label included; nearest ring wins), so near-misses no longer drag the whole
+  window.
+- The Test button now plays three staggered waves (0.6 s apart, one number per
+  lane) instead of dumping everything in one frame — wave two shows a crit.
+
 ## 1.10.0
 - The overlay opens automatically when nParse+ starts (no tray visit needed;
   opt out in settings), and the setup guides now appear only on a fresh

@@ -17,6 +17,8 @@ drift and fade. It only reads your EQ log — nothing is sent anywhere.
 It opens in **setup mode**: you'll see a faint border, a blue centre line, and
 a labelled ring for every lane.
 
+![Setup mode with draggable lane rings](FCToverlayplacement.png)
+
 1. Drag the window (empty space) so the **centre line** sits on your character.
 2. Drag each **lane's ring** to where you want its numbers to appear — they
    save automatically the moment you let go.
@@ -29,6 +31,8 @@ To move things again later: open the settings page (below) and click
 ## The settings page
 
 nParse+ Settings → **Floating Combat Text**:
+
+![The Floating Combat Text settings page](FCTsettings.png)
 
 - **Open overlay in setup mode / Test / Reset to defaults** — buttons up top.
   *Test* fires sample numbers so you can preview without fighting.

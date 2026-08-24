@@ -8,7 +8,14 @@ pop, drift in a direction you choose, and fade.
 It reads the EQ log file only — no memory reading, no injection — and it never
 sends anything anywhere.
 
-![screenshot](docs/screenshot.png)
+![The settings page: per-lane colours, sizes, directions, and travel](docs/FCTsettings.png)
+*Every lane has its own colour, size, drift direction, and travel distance.*
+
+![Setup mode: draggable lane rings over the game world](docs/FCToverlayplacement.png)
+*Setup mode — drag each lane's ring where you want its numbers; placements save automatically.*
+
+![Live combat text: hits, crits, heals, pet damage, and misses](docs/FCTnumberstest.png)
+*In action — white hits with a glowing `312!` crit, green heals, orange pet damage, red incoming, and miss/riposte ticks.*
 
 ## Lanes
 

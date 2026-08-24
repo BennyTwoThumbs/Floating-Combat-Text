@@ -153,7 +153,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.10.0",
+        version="1.10.1",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -574,27 +574,15 @@ class CombatTextPlugin(NParsePlugin):
         self._persist()
 
     def request_test(self) -> bool:
-        """Show the overlay and fire a burst of sample numbers in every lane.
-        Returns False if the window has not been created yet."""
-        import random as _random
-
+        """Show the overlay and run the sample sequence: three waves, one
+        number per lane, 0.6 s apart (scheduling lives in the window, which
+        owns the Qt timers). Returns False if the window doesn't exist yet."""
         win = self._window
         if win is None:
             return False
         win.show()
         win.raise_()
-        samples = {
-            "out": 250, "outns": 40, "pet": 45, "in": 67,
-            "inns": 3, "outheal": 399, "inheal": 438,
-        }
-        with self._lock:
-            for kind, amount in samples.items():
-                for _ in range(3):
-                    value = max(1, amount + _random.randint(-6, 24))
-                    self._pending.append((kind, str(value), value))
-            self._pending.append(("outmiss", "riposte", 0))
-            self._pending.append(("inmiss", "miss", 0))
-            self._pending.append(("out", "312!", 312))  # crit example
+        win.start_test()
         return True
 
     # --- presets / sharing --------------------------------------------------

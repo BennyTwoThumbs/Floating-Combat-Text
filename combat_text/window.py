@@ -159,6 +159,28 @@ class CombatTextWindow(PluginWindow):
         if not self.isVisible():
             self.show()
 
+    # --- test sequence ------------------------------------------------------
+    def start_test(self) -> None:
+        """Three waves of samples, one number per lane, 0.6 s apart."""
+        for i in range(3):
+            QTimer.singleShot(i * 600, lambda wave=i: self._test_wave(wave))
+
+    def _test_wave(self, wave: int) -> None:
+        out = 240 + random.randint(0, 30)
+        waves = {
+            "out": ("312!", 312) if wave == 1 else (str(out), out),  # wave 2 crits
+            "outns": (str(38 + random.randint(0, 8)), 40),
+            "pet": (str(42 + random.randint(0, 9)), 45),
+            "in": (str(60 + random.randint(0, 14)), 67),
+            "inns": (str(2 + random.randint(0, 3)), 3),
+            "outheal": (str(390 + random.randint(0, 20)), 399),
+            "inheal": (str(430 + random.randint(0, 16)), 438),
+            "outmiss": (("miss", "riposte", "dodge")[wave], 0),
+            "inmiss": (("dodge", "miss", "parry")[wave], 0),
+        }
+        for kind, (text, amount) in waves.items():
+            self._spawn(text, amount, kind)
+
     def _sync_click_through(self) -> None:
         """Locked + click_through setting => pass clicks through to the game.
         Setup mode always stays interactive so lanes can be dragged."""
@@ -365,16 +387,18 @@ class CombatTextWindow(PluginWindow):
     def _lane_at(self, px: float, py: float) -> str | None:
         w = max(1, self.width())
         h = max(1, self.height())
-        # Nearest lane whose grab-ring the cursor is inside wins, so overlapping
-        # rings still resolve to one lane rather than the first in list order.
+        # Generous nearest-wins hit test: a press anywhere NEAR a ring (ring
+        # radius + 36 px, which also covers the label under it) grabs that
+        # lane. Only presses far from every ring fall through to the window
+        # move, so near-misses stop yanking the whole overlay around.
         best: str | None = None
         best_d2 = float("inf")
         for kind in LANE_KINDS:
             cx = float(self._plugin.get(f"x_{kind}")) * w
             cy = float(self._plugin.get(f"y_{kind}")) * h
-            radius = _grab_radius(float(self._plugin.get(f"size_{kind}")))
+            reach = _grab_radius(float(self._plugin.get(f"size_{kind}"))) + 36.0
             d2 = (px - cx) ** 2 + (py - cy) ** 2
-            if d2 <= radius * radius and d2 < best_d2:
+            if d2 <= reach * reach and d2 < best_d2:
                 best, best_d2 = kind, d2
         return best
 
