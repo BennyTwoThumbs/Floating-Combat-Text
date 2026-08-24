@@ -111,6 +111,14 @@ def _pop_scale(age_ms: float) -> float:
     return 1.12 - 0.12 * settle
 
 
+
+
+def _flare_rgb(base: tuple[int, int, int], age_ms: float) -> tuple[int, int, int]:
+    """Killing-blow bloom: the outline starts near-white and decays to ``base``
+    over ~350 ms, so the kill reads as a flash rather than a steady glow."""
+    k = max(0.0, 1.0 - age_ms / 350.0)
+    return tuple(min(255, int(c + (255 - c) * k)) for c in base)  # type: ignore[return-value]
+
 @dataclass(slots=True)
 class _Num:
     text: str
@@ -126,6 +134,9 @@ class _Num:
     dy: float         # travel direction, y component (+down)
     rise: float       # travel distance over the number's life (fraction)
     label: str        # special-attack word drawn above the number ("" = none)
+    kind: str         # lane this number belongs to (killing-blow lookup)
+    flare: bool = False   # killing blow: bright bloom + double lifetime
+    flare_at: float = 0.0 # when the kill landed (bloom clock, separate from born)
 
 
 class CombatTextWindow(PluginWindow):
@@ -183,6 +194,8 @@ class CombatTextWindow(PluginWindow):
         labels = {0: {"out": "backstab"}, 1: {"out": "Crippling Blow"}, 2: {"pet": "bash"}}
         for kind, (text, amount) in waves.items():
             self._spawn(text, amount, kind, labels.get(wave, {}).get(kind, ""))
+        if wave == 2:
+            QTimer.singleShot(260, lambda: self._mark_killing_blow("out"))
 
     def _sync_click_through(self) -> None:
         """Locked + click_through setting => pass clicks through to the game.
@@ -202,6 +215,9 @@ class CombatTextWindow(PluginWindow):
         self.update()
 
     def _spawn(self, text: str, amount: int, kind: str, label: str = "") -> None:
+        if amount < 0:
+            self._mark_killing_blow(kind)
+            return
         p = self._plugin
         if not p.get(f"enabled_{kind}"):
             return
@@ -238,11 +254,28 @@ class CombatTextWindow(PluginWindow):
                 dy=dy,
                 rise=rise,
                 label=label if p.get("show_special_labels") else "",
+                kind=kind,
             )
         )
         if len(self._nums) > MAX_NUMS:
             del self._nums[: len(self._nums) - MAX_NUMS]
 
+
+    def _mark_killing_blow(self, kind: str) -> None:
+        """Flare + linger the newest number in ``kind``'s lane.
+
+        The slain line lands after the damage line, so the killing blow is
+        already drifting; this decorates it in place rather than adding text.
+        """
+        if not self._plugin.get("killing_blow"):
+            return
+        for n in reversed(self._nums):
+            if n.kind == kind:
+                n.flare = True
+                n.flare_at = time.monotonic()
+                if self._plugin.get("killing_blow_label"):
+                    n.label = "Killing blow"
+                return
     # --- painting ----------------------------------------------------------
     def paintEvent(self, event: Any) -> None:  # noqa: N802 (Qt override)
         p = self._plugin
@@ -263,10 +296,12 @@ class CombatTextWindow(PluginWindow):
         alive: list[_Num] = []
         for n in self._nums:
             age_ms = (now - n.born) * 1000.0
-            if age_ms >= lifetime_ms:
+            # killing blows hang around twice as long
+            life = lifetime_ms * 2.0 if n.flare else lifetime_ms
+            if age_ms >= life:
                 continue
             alive.append(n)
-            t = age_ms / lifetime_ms
+            t = age_ms / life
             x_px = (n.x + n.dx * n.rise * t) * w
             y_px = (n.y0 + n.dy * n.rise * t) * h
             if t <= FADE_START:
@@ -288,7 +323,15 @@ class CombatTextWindow(PluginWindow):
                     big_color,
                 )
             self._draw_number(
-                painter, n.text, x_px, y_px, size, (n.r, n.g, n.b), alpha, n.big, big_color
+                painter,
+                n.text,
+                x_px,
+                y_px,
+                size,
+                (n.r, n.g, n.b),
+                alpha,
+                n.big or n.flare,
+                _flare_rgb(big_color, (now - n.flare_at) * 1000.0) if n.flare else big_color,
             )
         self._nums = alive
         painter.end()
@@ -732,6 +775,14 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     mform.addRow(
         "Label size (px)", _spin("label_size", 6, 48, int(values.get("label_size", 12)), motion)
     )
+    kb = QCheckBox("Flare the killing blow (your kills and your pet's)", motion)
+    kb.setObjectName("killing_blow")
+    kb.setChecked(bool(values.get("killing_blow", True)))
+    mform.addRow(kb)
+    kbl = QCheckBox("…and label it “Killing blow”", motion)
+    kbl.setObjectName("killing_blow_label")
+    kbl.setChecked(bool(values.get("killing_blow_label", True)))
+    mform.addRow(kbl)
     auto = QCheckBox("Open the overlay automatically when nParse+ starts", motion)
     auto.setObjectName("auto_show")
     auto.setChecked(bool(values.get("auto_show", True)))
@@ -752,7 +803,7 @@ def read_settings_page(page: QWidget) -> dict:
         "enabled_out", "enabled_outns", "enabled_pet", "enabled_in", "enabled_inns",
         "enabled_outheal", "enabled_inheal", "enabled_outmiss", "enabled_inmiss",
         "scale_with_damage", "spawn_pop", "click_through", "setup_on_open",
-        "auto_show", "show_special_labels",
+        "auto_show", "show_special_labels", "killing_blow", "killing_blow_label",
     ):
         w = page.findChild(QCheckBox, name)
         if w is not None:

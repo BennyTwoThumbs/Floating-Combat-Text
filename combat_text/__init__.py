@@ -146,6 +146,10 @@ DEFAULTS: dict[str, Any] = {
     # above the number; toggle off for bare numbers.
     "show_special_labels": True,
     "label_size": 12,
+    # killing-blow flourish: the hit that kills flares and lingers, with an
+    # optional "Killing blow" label. Only your own (and your pet's) kills.
+    "killing_blow": True,
+    "killing_blow_label": True,
     "spawn_pop": True,      # numbers pop in (scale up then settle)
     "click_through": True,  # when NOT in setup mode, let clicks pass to the game
     # Miss/avoidance ticks get their own two lanes so they can be placed apart
@@ -169,7 +173,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.11.0",
+        version="1.12.0",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -247,7 +251,7 @@ class CombatTextPlugin(NParsePlugin):
 
     # --- event wiring ------------------------------------------------------
     def _subscribe_typed(self, ctx: PluginContext) -> None:
-        from nparseplus_sdk.events import DamageEvent, PetEvent
+        from nparseplus_sdk.events import DamageEvent, PetEvent, SlainEvent
 
         def on_damage(ev: Any) -> None:
             self._record(
@@ -265,6 +269,11 @@ class CombatTextPlugin(NParsePlugin):
 
         ctx.subscribe(DamageEvent, on_damage)
         ctx.subscribe(PetEvent, on_pet)
+
+        def on_slain(ev: Any) -> None:
+            self._record_slain(getattr(ev, "killer", ""))
+
+        ctx.subscribe(SlainEvent, on_slain)
 
         # The host turns "<mob> was hit by non-melee" into a DamageEvent (your
         # DS / nukes / procs), but NOT the self line "You were hit by non-melee
@@ -378,6 +387,8 @@ class CombatTextPlugin(NParsePlugin):
         miss_out = re.compile(r"^You try to \w+ [\w` ]+, but (?P<rest>.+)")
         miss_in = re.compile(r"^[\w`'\-. ]+? tries to \w+ YOU, but (?P<rest>.+)")
         avoid_word = re.compile(r"\b(dodge|parr|riposte|block|absorb)", re.IGNORECASE)
+        slain_you = re.compile(r"^You have slain [\w` ]+")
+        slain_by = re.compile(r"^[\w` ]+ (?:has|have) been slain by (?P<k>[\w` ]+)")
         crit_re = re.compile(
             r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
             r"|delivers? a critical blast!|lands? a Crippling Blow!)"
@@ -397,6 +408,14 @@ class CombatTextPlugin(NParsePlugin):
             msg = getattr(ev, "line", "") or ""
             if not msg:
                 return
+            if "slain" in msg:
+                if slain_you.match(msg):
+                    self._record_slain("You")
+                    return
+                m = slain_by.match(msg)
+                if m:
+                    self._record_slain(m.group("k"))
+                    return
             if "critical" in msg or "rippling" in msg:
                 m = crit_re.match(msg)
                 if m:
@@ -507,6 +526,30 @@ class CombatTextPlugin(NParsePlugin):
                 return
             self._crits.append((amount, time.monotonic(), label))
 
+
+    def _record_slain(self, killer: str) -> None:
+        """Queue a killing-blow marker for the lane that landed the kill.
+
+        The host publishes the slain line just AFTER the damage line, so the
+        number is already on screen; the window resolves the marker by finding
+        that lane's newest number. Only your own and your pet's kills count —
+        "<mob> died." carries no killer and is ignored.
+        """
+        who = (killer or "").strip().lower()
+        if not who:
+            return
+        player = getattr(self._ctx, "player", None)
+        me = (getattr(player, "name", "") or "").strip().lower()
+        with self._lock:
+            pet = self._pet_name.strip().lower()
+            if who == "you" or (me and who == me):
+                kind = "out"
+            elif pet and who == pet:
+                kind = "pet"
+            else:
+                return
+            # amount -1 is the marker sentinel; the window never draws it.
+            self._pending.append((kind, "", -1, ""))
     def _record_miss(self, side: str, word: str) -> None:
         """Queue an avoidance tick ('miss'/'dodge'/…) into its own lane
         ("outmiss"/"inmiss"); the lane's enable toggle governs visibility."""

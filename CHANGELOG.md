@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.12.0
+- Killing-blow flourish: the hit that kills flares bright and lingers about
+  twice as long, with an optional "Killing blow" label (uses your label size).
+  Fires only on your own kills and your pet's — nothing fires when something
+  else dies nearby. Both parts toggleable, on by default.
+
 ## 1.11.0
 - Special-attack labels: backstabs, bashes, kicks and Crippling Blows draw
   their name above the number (`backstab 250`, `Crippling Blow 96!`). Normal
