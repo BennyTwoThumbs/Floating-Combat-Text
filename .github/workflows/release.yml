@@ -73,7 +73,6 @@ jobs:
 
       - name: Announce to registry
         if: env.HAS_TOKEN == 'true'
-        continue-on-error: true
         env:
           NPARSE_REGISTRY_TOKEN: ${{ secrets.NPARSE_REGISTRY_TOKEN }}
         run: |
