@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.12.1
+- Releases now also attach a versionless `floating-combat-text.zip`, so
+  `releases/latest/download/floating-combat-text.zip` is a permanent link to
+  the newest build. README gains a live version badge. No plugin changes.
+
 ## 1.12.0
 - Killing-blow flourish: the hit that kills flares bright and lingers about
   twice as long, with an optional "Killing blow" label (uses your label size).
