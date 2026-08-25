@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from nparseplus_sdk.ui import PluginWindow
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -48,7 +48,7 @@ FADE_START = 0.55       # fraction of life after which a number begins to fade
 MAX_NUMS = 120          # hard cap on numbers drawn at once
 # Band along each edge reserved for the frameless window's own resize grip.
 # Lane dragging never claims a press in here, or the edges become unusable.
-RESIZE_MARGIN = 12
+RESIZE_MARGIN = 16
 # Numbers fade out as they approach an edge instead of being clipped mid-glyph.
 EDGE_FADE_MIN = 24.0
 
@@ -644,9 +644,16 @@ class CombatTextWindow(PluginWindow):
         self, painter: QPainter, w: int, h: int, big_color: tuple[int, int, int]
     ) -> None:
         p = self._plugin
-        painter.setPen(QColor(255, 255, 255, 40))
-        painter.drawRect(0, 0, w - 1, h - 1)
-        painter.setPen(QColor(120, 200, 255, 70))
+        # Outer border: thick and bright, because it doubles as the thing you
+        # aim at to resize the window.
+        painter.setPen(QPen(QColor(255, 255, 255, 150), 3))
+        painter.drawRect(1, 1, w - 3, h - 3)
+        # Inner line marking how far in the resize band reaches — anywhere
+        # between it and the border resizes rather than dragging a lane.
+        m = RESIZE_MARGIN
+        painter.setPen(QPen(QColor(255, 255, 255, 55), 1, Qt.PenStyle.DashLine))
+        painter.drawRect(m, m, max(1, w - 2 * m), max(1, h - 2 * m))
+        painter.setPen(QPen(QColor(120, 200, 255, 120), 2))
         painter.drawLine(w // 2, 0, w // 2, h)
 
         threshold = int(p.get("big_threshold"))
@@ -668,13 +675,13 @@ class CombatTextWindow(PluginWindow):
             rgb = tuple(p.get(f"color_{kind}") or (255, 255, 255))
             # grab handle (matches the drag hit target exactly)
             r = _grab_radius(float(p.get(f"size_{kind}")))
-            ring = QColor(*rgb, 90 if enabled else 35)
-            painter.setPen(ring)
+            ring = QColor(*rgb, 150 if enabled else 60)
+            painter.setPen(QPen(ring, 3))
             painter.drawEllipse(int(cx - r), int(cy - r), int(2 * r), int(2 * r))
             # travel-direction indicator
             dx, dy = DIR_VEC.get(p.get(f"dir_{kind}") or "up", (0.0, -1.0))
-            painter.setPen(QColor(*rgb, 150 if enabled else 60))
-            painter.drawLine(int(cx), int(cy), int(cx + dx * 30), int(cy + dy * 30))
+            painter.setPen(QPen(QColor(*rgb, 190 if enabled else 70), 3))
+            painter.drawLine(int(cx), int(cy), int(cx + dx * 34), int(cy + dy * 34))
             self._draw_number(
                 painter,
                 samples[kind],
@@ -759,8 +766,14 @@ class CombatTextWindow(PluginWindow):
     def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 (Qt override)
         if self._drag_lane is not None:
             pos = event.position()
-            x = _clamp(pos.x() / max(1, self.width()), 0.0, 1.0)
-            y = _clamp(pos.y() / max(1, self.height()), 0.0, 1.0)
+            # Keep rings clear of the resize band; a lane dropped under it
+            # could never be picked up again, since the edge wins the press.
+            w = max(1, self.width())
+            h = max(1, self.height())
+            pad_x = min(0.45, (RESIZE_MARGIN + 4) / w)
+            pad_y = min(0.45, (RESIZE_MARGIN + 4) / h)
+            x = _clamp(pos.x() / w, pad_x, 1.0 - pad_x)
+            y = _clamp(pos.y() / h, pad_y, 1.0 - pad_y)
             self._plugin.set_lane_position(self._drag_lane, x, y, persist=False)
             self.update()
             event.accept()
@@ -786,14 +799,21 @@ class CombatTextWindow(PluginWindow):
         self._sync_click_through()
         self.update()
 
-    def enter_setup_and_show(self) -> None:
-        """Show the overlay, raise it, and turn on the setup guides."""
-        self._setup = True
+
+    def is_setup(self) -> bool:
+        return self._setup
+
+    def toggle_setup(self) -> bool:
+        """Turn the setup guides on or off, showing the overlay if it was
+        hidden — guides you cannot see would be a strange thing to enable."""
+        self._setup = not self._setup
+        if self._setup and not self.isVisible():
+            self.show()
+            self.raise_()
         self._sync_click_through()
-        self.show()
-        self.raise_()
-        self.activateWindow()
         self.update()
+        return self._setup
+
 
 
 # --------------------------------------------------------------------------
@@ -898,20 +918,32 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
 
     # --- Open / test / reset ----------------------------------------------
     _tray_note = (
-        "Open the overlay first from the nParse+ tray menu (look for "
-        "“Floating Combat Text”), then try this again."
+        "Open the overlay once from the nParse+ tray menu (look for "
+        "“Floating Combat Text”), then these will work."
     )
-    open_btn = QPushButton("Open overlay in setup mode", page)
+    setup_btn = QPushButton(page)
     test_btn = QPushButton("Test", page)
     reset_btn = QPushButton("Reset to defaults", page)
+    setup_btn.setToolTip(
+        "Show the lane rings and the centre guide so lanes can be dragged and "
+        "the window resized. The overlay ignores the mouse when this is off."
+    )
 
-    def _open() -> None:
-        if not (plugin is not None and plugin.open_overlay()):
+    def _refresh_buttons() -> None:
+        in_setup = bool(plugin is not None and plugin.setup_active())
+        setup_btn.setText("Leave setup mode" if in_setup else "Setup mode")
+
+    def _toggle_setup() -> None:
+        if plugin is None or plugin.toggle_setup() is None:
             QMessageBox.information(page, "Floating Combat Text", _tray_note)
+            return
+        _refresh_buttons()
 
     def _test() -> None:
         if not (plugin is not None and plugin.request_test()):
             QMessageBox.information(page, "Floating Combat Text", _tray_note)
+            return
+        _refresh_buttons()
 
     def _reset() -> None:
         if plugin is None:
@@ -928,11 +960,12 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         plugin.reset_defaults()
         _apply_values_to_page(page, plugin.settings())
 
-    open_btn.clicked.connect(_open)
+    setup_btn.clicked.connect(_toggle_setup)
     test_btn.clicked.connect(_test)
     reset_btn.clicked.connect(_reset)
+    _refresh_buttons()
     buttons = QHBoxLayout()
-    buttons.addWidget(open_btn)
+    buttons.addWidget(setup_btn)
     buttons.addWidget(test_btn)
     buttons.addStretch(1)
     buttons.addWidget(reset_btn)

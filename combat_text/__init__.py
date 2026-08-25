@@ -199,7 +199,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.13.0",
+        version="1.13.2",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -735,15 +735,14 @@ class CombatTextPlugin(NParsePlugin):
     def deactivate(self) -> None:
         self._persist()
 
-    def open_overlay(self) -> bool:
-        """Bring the overlay forward and into setup mode. Returns False if the
-        window has not been created yet (open it from the tray menu first)."""
+    def setup_active(self) -> bool:
         win = self._window
-        if win is None:
-            return False
-        win.enter_setup_and_show()
-        return True
+        return bool(win is not None and win.is_setup())
 
+    def toggle_setup(self) -> bool | None:
+        """Turn the setup guides on/off. None if there is no window yet."""
+        win = self._window
+        return None if win is None else win.toggle_setup()
 
     def reset_defaults(self) -> None:
         """Restore every setting to its default and refresh the overlay."""

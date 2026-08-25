@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.13.2
+- Setup mode is much easier to aim at: the window border is drawn thick and
+  bright (it is what you grab to resize), a dashed inner line now shows how
+  far the resize band reaches, and the lane rings, direction ticks and centre
+  guide are all thicker.
+- Lane rings can no longer be dragged under the resize band, where the edge
+  would win every press and the ring could never be picked up again.
+
+## 1.13.1
+- The settings page's "Open overlay in setup mode" button is now a toggle:
+  **Setup mode** / **Leave setup mode**, relabelling itself to match the
+  overlay's current state. It still shows the overlay if it was hidden.
+
 ## 1.13.0
 - Numbers now fan out in a cone around their lane's direction instead of all
   travelling the identical vector, and each one's travel distance varies a
