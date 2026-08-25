@@ -36,7 +36,11 @@ def main() -> None:
     ap.add_argument("--token", default=os.environ.get("NPARSE_REGISTRY_TOKEN", ""))
     args = ap.parse_args()
 
-    if not args.token:
+    # A token pasted into a CI secret often carries a trailing newline or
+    # stray whitespace; urllib refuses such a header outright with
+    # "Invalid header value", so normalise before it reaches the request.
+    token = "".join(args.token.split())
+    if not token:
         sys.exit("no token: pass --token or set NPARSE_REGISTRY_TOKEN")
 
     # Field names verified against the registry's 422 response:
@@ -53,7 +57,7 @@ def main() -> None:
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={
-            "Authorization": f"Bearer {args.token}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Idempotency-Key": f"{args.id}-{args.version}",
         },

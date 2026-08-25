@@ -11,8 +11,10 @@ mechanics (frame rate, fade curve, outline shape).
 
 from __future__ import annotations
 
+import math
 import random
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +46,24 @@ if TYPE_CHECKING:  # pragma: no cover
 FPS = 60
 FADE_START = 0.55       # fraction of life after which a number begins to fade
 MAX_NUMS = 120          # hard cap on numbers drawn at once
+# Band along each edge reserved for the frameless window's own resize grip.
+# Lane dragging never claims a press in here, or the edges become unusable.
+RESIZE_MARGIN = 12
+# Numbers fade out as they approach an edge instead of being clipped mid-glyph.
+EDGE_FADE_MIN = 24.0
+
+# Level-up flourish: how long the big "Ding! N!" lives, how much of that is
+# spent growing, how large it gets relative to your main lane, and how many
+# little ones scatter with it.
+DING_MS = 1700.0
+DING_GROW = 0.30
+DING_FADE_FROM = 0.55
+# How much of the window the finished Ding! spans, and the most of the
+# height it may take. Sized by measuring the text, so it fills the overlay
+# instead of guessing at a multiple and clipping.
+DING_FILL_W = 0.92
+DING_FILL_H = 0.72
+DING_PARTICLES = 22
 
 LANE_KINDS = (
     "out", "outns", "pet", "in", "inns", "outheal", "inheal", "outmiss", "inmiss"
@@ -99,6 +119,29 @@ def _grab_radius(size: float) -> float:
     return max(34.0, float(size) * 0.6 + 20.0)
 
 
+
+# Relative sizing: how many recent hits per lane feed the "typical hit"
+# baseline, and how few will do before it is trusted. A median is used rather
+# than a mean so one crit does not drag the whole lane's scale up.
+BASELINE_SAMPLES = 60
+BASELINE_MIN = 8
+
+# Emphasis tiers. Relative mode grades a hit by how many times your typical
+# hit it is; raw mode steps off multiples of the big-hit threshold.
+RELATIVE_TIERS = (1.6, 2.6, 4.0)
+ABSOLUTE_TIER_MULTIPLES = (1.0, 2.0, 4.0)
+
+
+def _median(values: list[int]) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    if not n:
+        return 0.0
+    mid = n // 2
+    if n % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
 _POP_MS = 130.0        # grow phase
 _POP_SETTLE_MS = 110.0  # overshoot -> settle phase
 
@@ -113,11 +156,32 @@ def _pop_scale(age_ms: float) -> float:
 
 
 
+def _outline_offsets(radius: int) -> tuple[tuple[int, int], ...]:
+    """Ring of pen offsets out to ``radius`` px — a thicker ring per tier."""
+    points: list[tuple[int, int]] = []
+    for r in range(1, max(1, radius) + 1):
+        points.extend(
+            ((-r, 0), (r, 0), (0, -r), (0, r), (-r, -r), (r, r), (-r, r), (r, -r))
+        )
+    return tuple(points)
+
+
 def _flare_rgb(base: tuple[int, int, int], age_ms: float) -> tuple[int, int, int]:
     """Killing-blow bloom: the outline starts near-white and decays to ``base``
     over ~350 ms, so the kill reads as a flash rather than a steady glow."""
     k = max(0.0, 1.0 - age_ms / 350.0)
     return tuple(min(255, int(c + (255 - c) * k)) for c in base)  # type: ignore[return-value]
+
+
+
+@dataclass(slots=True)
+class _Ding:
+    """The one big level-up number. Kept apart from _Num because it grows far
+    past the edge-fade margin and would otherwise erase itself."""
+
+    text: str
+    born: float
+
 
 @dataclass(slots=True)
 class _Num:
@@ -129,10 +193,11 @@ class _Num:
     x: float          # fraction of width, centre of the text
     y0: float         # fraction of height, starting baseline
     born: float       # time.monotonic() at spawn
-    big: bool         # big hit -> orange outline + extra size
+    tier: int         # 0 = ordinary; 1-3 = progressively louder flourish
     dx: float         # travel direction, x component (+right)
     dy: float         # travel direction, y component (+down)
     rise: float       # travel distance over the number's life (fraction)
+    grav: float       # downward pull over its life (0 = straight drift)
     label: str        # special-attack word drawn above the number ("" = none)
     kind: str         # lane this number belongs to (killing-blow lookup)
     flare: bool = False   # killing blow: bright bloom + double lifetime
@@ -150,6 +215,10 @@ class CombatTextWindow(PluginWindow):
         # install so lanes can be placed before any settings exist.
         self._setup = bool(plugin.get("setup_on_open")) or plugin.first_run()
         self._drag_lane: str | None = None
+        # Recent hit sizes per lane, for the "relative" sizing baseline.
+        # GUI thread only (written and read in _spawn), so no lock needed.
+        self._recent: dict[str, deque[int]] = {}
+        self._ding: _Ding | None = None
         self._ct_applied: bool | None = None
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -172,24 +241,44 @@ class CombatTextWindow(PluginWindow):
             self.show()
 
     # --- test sequence ------------------------------------------------------
+    # A typical hit per lane, used to prime the relative-sizing baseline for a
+    # test run, and multiplied per wave so the tiers are actually visible.
+    TEST_TYPICAL = {
+        "out": 90, "outns": 40, "pet": 45, "in": 67, "inns": 3,
+        "outheal": 400, "inheal": 438,
+    }
+    TEST_WAVE_MULTIPLES = (1.0, 2.7, 5.0)
+
     def start_test(self) -> None:
-        """Three waves of samples, one number per lane, 0.6 s apart."""
+        """Three waves of samples, one number per lane, 0.6 s apart.
+
+        Relative sizing needs a lane's median before it means anything, and a
+        three-wave test never reaches it — so a lane with no real history yet
+        gets primed with plausible hits first. Lanes that HAVE seen real
+        combat keep their own baseline, so a test never rewrites it.
+        """
+        for kind, typical in self.TEST_TYPICAL.items():
+            recent = self._recent.setdefault(kind, deque(maxlen=BASELINE_SAMPLES))
+            if len(recent) < BASELINE_MIN:
+                recent.extend(
+                    max(1, int(typical * random.uniform(0.8, 1.2)))
+                    for _ in range(BASELINE_MIN + 2)
+                )
         for i in range(3):
             QTimer.singleShot(i * 600, lambda wave=i: self._test_wave(wave))
 
     def _test_wave(self, wave: int) -> None:
-        out = 240 + random.randint(0, 30)
-        waves = {
-            "out": ("312!", 312) if wave == 1 else (str(out), out),  # wave 2 crits
-            "outns": (str(38 + random.randint(0, 8)), 40),
-            "pet": (str(42 + random.randint(0, 9)), 45),
-            "in": (str(60 + random.randint(0, 14)), 67),
-            "inns": (str(2 + random.randint(0, 3)), 3),
-            "outheal": (str(390 + random.randint(0, 20)), 399),
-            "inheal": (str(430 + random.randint(0, 16)), 438),
-            "outmiss": (("miss", "riposte", "dodge")[wave], 0),
-            "inmiss": (("dodge", "miss", "parry")[wave], 0),
+        mult = self.TEST_WAVE_MULTIPLES[wave]
+        amounts = {
+            kind: max(1, int(typical * mult * random.uniform(0.9, 1.1)))
+            for kind, typical in self.TEST_TYPICAL.items()
         }
+        waves = {kind: (str(v), v) for kind, v in amounts.items()}
+        # wave 2 is the crit
+        if wave == 1:
+            waves["out"] = (f"{amounts['out']}!", amounts["out"])
+        waves["outmiss"] = (("miss", "riposte", "dodge")[wave], 0)
+        waves["inmiss"] = (("dodge", "miss", "parry")[wave], 0)
         # wave 1 shows a special-attack label, wave 2 a Crippling Blow crit
         labels = {0: {"out": "backstab"}, 1: {"out": "Crippling Blow"}, 2: {"pet": "bash"}}
         for kind, (text, amount) in waves.items():
@@ -201,9 +290,21 @@ class CombatTextWindow(PluginWindow):
         """Locked + click_through setting => pass clicks through to the game.
         Setup mode always stays interactive so lanes can be dragged."""
         want = (not self._setup) and bool(self._plugin.get("click_through"))
-        if want != self._ct_applied:
-            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, want)
-            self._ct_applied = want
+        if want == self._ct_applied:
+            return
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, want)
+        first = self._ct_applied is None
+        self._ct_applied = want
+        # On Windows this attribute becomes the WS_EX_TRANSPARENT window style,
+        # which is only read when the native window is created. Flipping it on
+        # a window that is already on screen changes nothing until the native
+        # window is rebuilt — so setup mode would draw its rings while the
+        # overlay stayed deaf to the mouse. Bounce it, keeping geometry.
+        if not first and self.isVisible():
+            geo = self.geometry()
+            self.hide()
+            self.show()
+            self.setGeometry(geo)
 
     # --- animation loop ----------------------------------------------------
     def _on_frame(self) -> None:
@@ -214,31 +315,95 @@ class CombatTextWindow(PluginWindow):
                 self._spawn(text, amount, kind, label)
         self.update()
 
+
+    def _damage_ratio(self, kind: str, amount: int) -> float:
+        """This hit against the median of recent hits in the same lane.
+
+        Returns 0.0 until the lane has enough history to be trusted. Records
+        the sample as a side effect, so call it exactly once per hit.
+        """
+        recent = self._recent.setdefault(kind, deque(maxlen=BASELINE_SAMPLES))
+        baseline = _median(list(recent)) if len(recent) >= BASELINE_MIN else 0.0
+        recent.append(amount)
+        return (amount / baseline) if baseline > 0 else 0.0
+
+    def _size_factor(self, amount: int, ratio: float, mode: str) -> float:
+        """Multiplier on the lane's base font size for this hit."""
+        if mode == "off":
+            return 1.0
+        if mode == "relative" and ratio > 0.0:
+            return _clamp(0.62 + 0.42 * ratio, 0.72, 2.0)
+        # "By raw damage", and the stand-in until a lane has history: a fixed
+        # curve on the raw number, which flattens out past 500.
+        return 1.0 + min(amount, 500) / 830.0
+
+    def _emphasis_tier(self, kind: str, amount: int, ratio: float, mode: str) -> int:
+        """0 = ordinary, 1..3 = progressively louder flourish.
+
+        Relative mode grades against your own recent hits, so the tiers keep
+        meaning something as you level; otherwise they step off the raw
+        big-hit threshold. Heals are never graded — a big heal is good news,
+        not a crit.
+        """
+        if kind in HEAL_KINDS or amount <= 0:
+            return 0
+        if mode == "relative" and ratio > 0.0:
+            edges = RELATIVE_TIERS
+            value = ratio
+        else:
+            threshold = float(self._plugin.get("big_threshold") or 0)
+            if threshold <= 0:
+                return 0
+            edges = tuple(threshold * m for m in ABSOLUTE_TIER_MULTIPLES)
+            value = float(amount)
+        tier = 0
+        for edge in edges:
+            if value >= edge:
+                tier += 1
+        return tier
+
     def _spawn(self, text: str, amount: int, kind: str, label: str = "") -> None:
+        if amount == -2:
+            self._start_ding(text)
+            return
         if amount < 0:
             self._mark_killing_blow(kind)
             return
         p = self._plugin
         if not p.get(f"enabled_{kind}"):
             return
+        size = float(p.get(f"size_{kind}"))
         if amount <= 0:
-            # avoidance tick ("miss"/"dodge"/…): the lane's own size, never big
-            size = float(p.get(f"size_{kind}"))
-            big = False
+            # avoidance tick ("miss"/"dodge"/…): the lane's own size, never graded
+            tier = 0
         else:
-            size = float(p.get(f"size_{kind}"))
-            if p.get("scale_with_damage"):
-                size *= 1.0 + min(amount, 500) / 830.0
-            big = kind not in HEAL_KINDS and amount >= int(p.get("big_threshold"))
-        if big:
-            size *= float(p.get("big_scale"))
+            mode = str(p.get("size_mode") or "relative")
+            ratio = self._damage_ratio(kind, amount)
+            size *= self._size_factor(amount, ratio, mode)
+            tier = self._emphasis_tier(kind, amount, ratio, mode)
+            # each tier adds a share of the configured big-hit bump, so the
+            # flourish grows with the hit instead of flipping on at one number.
+            size *= 1.0 + (float(p.get("big_scale")) - 1.0) * tier / 3.0
         rgb = p.get(f"color_{kind}") or [255, 255, 255]
         jitter = float(p.get("jitter_pct")) / 100.0
         vspread = float(p.get("vspread_pct")) / 100.0
         x = float(p.get(f"x_{kind}")) + random.uniform(-jitter, jitter)
         y0 = float(p.get(f"y_{kind}")) + random.uniform(-vspread, vspread)
         dx, dy = DIR_VEC.get(p.get(f"dir_{kind}") or "up", (0.0, -1.0))
-        rise = float(p.get(f"dist_{kind}") or 42) / 100.0
+        # Fan each number out within a cone around the lane's direction, and
+        # vary its travel a little, so a burst reads as a spray rather than a
+        # column of identical parallel numbers.
+        spread = math.radians(float(p.get("spread_deg") or 0))
+        if spread:
+            angle = random.uniform(-spread, spread)
+            cos_a, sin_a = math.cos(angle), math.sin(angle)
+            dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+        rise = float(p.get(f"dist_{kind}") or 42) / 100.0 * random.uniform(0.88, 1.12)
+        grav = (
+            float(p.get("gravity_pct") or 0) / 100.0
+            if p.get(f"gravity_{kind}")
+            else 0.0
+        )
         self._nums.append(
             _Num(
                 text=text,
@@ -249,10 +414,11 @@ class CombatTextWindow(PluginWindow):
                 x=x,
                 y0=y0,
                 born=time.monotonic(),
-                big=big,
+                tier=tier,
                 dx=dx,
                 dy=dy,
                 rise=rise,
+                grav=grav,
                 label=label if p.get("show_special_labels") else "",
                 kind=kind,
             )
@@ -260,6 +426,42 @@ class CombatTextWindow(PluginWindow):
         if len(self._nums) > MAX_NUMS:
             del self._nums[: len(self._nums) - MAX_NUMS]
 
+
+
+    def _start_ding(self, level: str) -> None:
+        """Level up: one big number blooming from the centre, plus a scatter of
+        small ones thrown in every direction. No lane and no ring — it borrows
+        the whole overlay for a moment and then gets out of the way."""
+        if not self._plugin.get("ding_flourish"):
+            return
+        now = time.monotonic()
+        self._ding = _Ding(text=f"Ding! {level}!", born=now)
+        rgb = self._plugin.get("ding_color") or [255, 214, 84]
+        r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
+        base = float(self._plugin.get("size_out") or 30) * 0.5
+        for _ in range(DING_PARTICLES):
+            angle = random.uniform(0.0, 2.0 * math.pi)
+            self._nums.append(
+                _Num(
+                    text="Ding!",
+                    r=r,
+                    g=g,
+                    b=b,
+                    size=max(8, int(base * random.uniform(0.6, 1.25))),
+                    x=0.5,
+                    y0=0.5,
+                    born=now,
+                    tier=0,
+                    dx=math.cos(angle),
+                    dy=math.sin(angle),
+                    rise=random.uniform(0.28, 0.62),
+                    grav=random.uniform(0.0, 0.45),
+                    label="",
+                    kind="ding",
+                )
+            )
+        if len(self._nums) > MAX_NUMS:
+            del self._nums[: len(self._nums) - MAX_NUMS]
 
     def _mark_killing_blow(self, kind: str) -> None:
         """Flare + linger the newest number in ``kind``'s lane.
@@ -302,13 +504,25 @@ class CombatTextWindow(PluginWindow):
                 continue
             alive.append(n)
             t = age_ms / life
+            # Ballistic path: launch along the lane direction, then let gravity
+            # bend it. With gravity 0 this is the original straight drift.
             x_px = (n.x + n.dx * n.rise * t) * w
-            y_px = (n.y0 + n.dy * n.rise * t) * h
+            y_px = (n.y0 + n.dy * n.rise * t + 0.5 * n.grav * t * t) * h
             if t <= FADE_START:
                 alpha = 1.0
             else:
                 alpha = max(0.0, 1.0 - (t - FADE_START) / (1.0 - FADE_START))
             size = max(6, int(n.size * _pop_scale(age_ms))) if pop else n.size
+            # Fade toward the edges rather than letting the widget clip a glyph
+            # in half — with gravity on, numbers routinely travel off the box.
+            fade_margin = max(EDGE_FADE_MIN, size * 1.25)
+            edge_dist = min(
+                x_px, w - x_px, y_px - size * 0.75, h - y_px
+            )
+            if edge_dist < fade_margin:
+                alpha *= _clamp(edge_dist / fade_margin, 0.0, 1.0)
+            if alpha <= 0.01:
+                continue
             if n.label:
                 # sits just above the number, in the lane's colour
                 self._draw_number(
@@ -319,7 +533,7 @@ class CombatTextWindow(PluginWindow):
                     label_size,
                     (n.r, n.g, n.b),
                     alpha,
-                    False,
+                    0,
                     big_color,
                 )
             self._draw_number(
@@ -330,11 +544,64 @@ class CombatTextWindow(PluginWindow):
                 size,
                 (n.r, n.g, n.b),
                 alpha,
-                n.big or n.flare,
+                3 if n.flare else n.tier,
                 _flare_rgb(big_color, (now - n.flare_at) * 1000.0) if n.flare else big_color,
             )
         self._nums = alive
+        self._paint_ding(painter, w, h, now, big_color)
         painter.end()
+
+    def _paint_ding(
+        self,
+        painter: QPainter,
+        w: int,
+        h: int,
+        now: float,
+        big_color: tuple[int, int, int],
+    ) -> None:
+        """The big level-up number: blooms out fast, holds, fades.
+
+        Eased rather than linear so it swells and settles instead of snapping —
+        celebratory, not a jump scare. Capped against the window so it cannot
+        grow past what the overlay can show.
+        """
+        ding = self._ding
+        if ding is None:
+            return
+        age = (now - ding.born) * 1000.0
+        if age >= DING_MS:
+            self._ding = None
+            return
+        t = age / DING_MS
+        grow = 1.0 - (1.0 - min(1.0, t / DING_GROW)) ** 3
+        # Measure the text at a reference size, then scale so it spans the
+        # window rather than assuming a multiple that may not fit.
+        probe = QFont()
+        probe.setPixelSize(100)
+        probe.setBold(True)
+        painter.setFont(probe)
+        advance = max(1, painter.fontMetrics().horizontalAdvance(ding.text))
+        by_width = (w * DING_FILL_W) * 100.0 / advance
+        target = max(12.0, min(by_width, h * DING_FILL_H))
+        start = target * 0.12
+        size = max(8, int(start + (target - start) * grow))
+        if t <= DING_FADE_FROM:
+            alpha = 0.94
+        else:
+            alpha = 0.94 * max(0.0, 1.0 - (t - DING_FADE_FROM) / (1.0 - DING_FADE_FROM))
+        rgb = self._plugin.get("ding_color") or [255, 214, 84]
+        self._draw_number(
+            painter,
+            ding.text,
+            w / 2.0,
+            h / 2.0 + size * 0.35,
+            size,
+            (int(rgb[0]), int(rgb[1]), int(rgb[2])),
+            alpha,
+            2,
+            big_color,
+        )
+
 
     def _draw_number(
         self,
@@ -345,7 +612,7 @@ class CombatTextWindow(PluginWindow):
         size: int,
         rgb: tuple[int, int, int],
         alpha: float,
-        big: bool = False,
+        tier: int = 0,
         big_color: tuple[int, int, int] = (255, 140, 0),
     ) -> None:
         font = QFont()
@@ -355,14 +622,12 @@ class CombatTextWindow(PluginWindow):
         tw = painter.fontMetrics().horizontalAdvance(text)
         x = int(cx - tw / 2)
         yi = int(y)
-        if big:
+        if tier > 0:
+            # The outline thickens and brightens with the tier, so a merely
+            # good hit is a thin halo and a monster is a fat glow.
             outline = QColor(*big_color)
-            outline.setAlphaF(min(1.0, alpha) * 0.95)
-            offsets = (
-                (-2, 0), (2, 0), (0, -2), (0, 2),
-                (-2, -2), (2, 2), (-2, 2), (2, -2),
-                (-1, 0), (1, 0), (0, -1), (0, 1),
-            )
+            outline.setAlphaF(min(1.0, alpha) * (0.72 + 0.09 * min(tier, 3)))
+            offsets = _outline_offsets(min(tier, 3))
         else:
             outline = QColor(0, 0, 0)
             outline.setAlphaF(min(1.0, alpha) * 0.85)
@@ -418,7 +683,7 @@ class CombatTextWindow(PluginWindow):
                 int(p.get(f"size_{kind}")),
                 rgb,
                 0.9 if enabled else 0.3,
-                big=(kind == "out"),
+                tier=2 if kind == "out" else 0,
                 big_color=big_color,
             )
             label = LANE_LABELS[kind] + ("" if enabled else "  (off)")
@@ -463,9 +728,20 @@ class CombatTextWindow(PluginWindow):
                 best, best_d2 = kind, d2
         return best
 
+    def _on_edge(self, px: float, py: float) -> bool:
+        """Is this press in the band the window uses for edge resizing?"""
+        m = RESIZE_MARGIN
+        return (
+            px <= m or py <= m or px >= self.width() - m or py >= self.height() - m
+        )
+
     def mousePressEvent(self, event: Any) -> None:  # noqa: N802 (Qt override)
         if self._setup and event.button() == Qt.MouseButton.LeftButton:
             pos = event.position()
+            # Edges belong to the resize grip, not to lane dragging.
+            if self._on_edge(pos.x(), pos.y()):
+                super().mousePressEvent(event)
+                return
             bx, by, bw, bh = self._hide_button_rect()
             if bx <= pos.x() <= bx + bw and by <= pos.y() <= by + bh:
                 self._setup = False
@@ -710,7 +986,7 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     grid.setHorizontalSpacing(14)
     grid.setVerticalSpacing(10)
     grid.setColumnStretch(4, 1)
-    for col, head in enumerate(("", "On", "Colour", "Size", "Move", "Travel %")):
+    for col, head in enumerate(("", "On", "Colour", "Size", "Move", "Grav", "Travel %")):
         grid.addWidget(QLabel(head, lanes), 0, col)
     for row, kind in enumerate(LANE_KINDS, start=1):
         grid.addWidget(QLabel(LANE_ROW_LABELS[kind], lanes), row, 0)
@@ -727,8 +1003,13 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         )
         grid.addWidget(_spin(f"size_{kind}", 8, 96, int(values.get(f"size_{kind}", 28)), lanes), row, 3)
         grid.addWidget(_dir_combo(f"dir_{kind}", str(values.get(f"dir_{kind}", "up")), lanes), row, 4)
+        grav = QCheckBox(lanes)
+        grav.setObjectName(f"gravity_{kind}")
+        grav.setChecked(bool(values.get(f"gravity_{kind}", False)))
+        grav.setToolTip("Let gravity arc this lane's numbers downward.")
+        grid.addWidget(grav, row, 5)
         grid.addWidget(
-            _spin(f"dist_{kind}", 0, 100, int(values.get(f"dist_{kind}", 42)), lanes), row, 5
+            _spin(f"dist_{kind}", 0, 100, int(values.get(f"dist_{kind}", 42)), lanes), row, 6
         )
     hint = QLabel(
         "“Move” is the direction numbers drift; “Travel” is how far (percent "
@@ -737,7 +1018,7 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         lanes,
     )
     hint.setWordWrap(True)
-    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 6)
+    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 7)
     root.addWidget(lanes)
 
     # --- Big hits ----------------------------------------------------------
@@ -754,10 +1035,31 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     mform.addRow("Lifetime (sec)", _dspin("lifetime_s", 0.3, 6.0, 0.1, float(values.get("lifetime_s", 1.5)), motion))
     mform.addRow("Horizontal spread (%)", _spin("jitter_pct", 0, 50, int(values.get("jitter_pct", 8)), motion))
     mform.addRow("Vertical spread (%)", _spin("vspread_pct", 0, 60, int(values.get("vspread_pct", 10)), motion))
-    scale = QCheckBox("Scale size with damage", motion)
-    scale.setObjectName("scale_with_damage")
-    scale.setChecked(bool(values.get("scale_with_damage", True)))
-    mform.addRow(scale)
+    size_mode = QComboBox(motion)
+    size_mode.setObjectName("size_mode")
+    for key, text in (
+        ("relative", "Relative to your typical hit"),
+        ("absolute", "By raw damage"),
+        ("off", "All the same size"),
+    ):
+        size_mode.addItem(text, key)
+    idx = size_mode.findData(str(values.get("size_mode", "relative")))
+    size_mode.setCurrentIndex(idx if idx >= 0 else 0)
+    mform.addRow("Size by damage", size_mode)
+    mform.addRow(
+        "Direction spread (°)", _spin("spread_deg", 0, 90, int(values.get("spread_deg", 18)), motion)
+    )
+    mform.addRow(
+        "Gravity (%)", _spin("gravity_pct", 0, 300, int(values.get("gravity_pct", 0)), motion)
+    )
+    gravity_note = QLabel(
+        "How hard gravity pulls, for the lanes with Grav ticked above. 0 is a "
+        "straight drift; higher values arc the numbers over and drop them. For a "
+        "fountain, point a lane up, widen the spread, tick Grav, and try about 120.",
+        motion,
+    )
+    gravity_note.setWordWrap(True)
+    mform.addRow(gravity_note)
     pop = QCheckBox("Pop numbers in when they appear", motion)
     pop.setObjectName("spawn_pop")
     pop.setChecked(bool(values.get("spawn_pop", True)))
@@ -774,6 +1076,17 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     mform.addRow(labels_cb)
     mform.addRow(
         "Label size (px)", _spin("label_size", 6, 48, int(values.get("label_size", 12)), motion)
+    )
+    ding = QCheckBox("Ding! flourish on level up", motion)
+    ding.setObjectName("ding_flourish")
+    ding.setChecked(bool(values.get("ding_flourish", True)))
+    ding.setToolTip(
+        "When you gain a level, a big Ding! blooms from the centre of the "
+        "overlay with a scatter of small ones."
+    )
+    mform.addRow(ding)
+    mform.addRow(
+        "Ding! colour", _ColorButton(values.get("ding_color", [255, 214, 84]), "ding_color", motion)
     )
     kb = QCheckBox("Flare the killing blow (your kills and your pet's)", motion)
     kb.setObjectName("killing_blow")
@@ -802,8 +1115,11 @@ def read_settings_page(page: QWidget) -> dict:
     for name in (
         "enabled_out", "enabled_outns", "enabled_pet", "enabled_in", "enabled_inns",
         "enabled_outheal", "enabled_inheal", "enabled_outmiss", "enabled_inmiss",
-        "scale_with_damage", "spawn_pop", "click_through", "setup_on_open",
+        "gravity_out", "gravity_outns", "gravity_pet", "gravity_in", "gravity_inns",
+        "gravity_outheal", "gravity_inheal", "gravity_outmiss", "gravity_inmiss",
+        "spawn_pop", "click_through", "setup_on_open",
         "auto_show", "show_special_labels", "killing_blow", "killing_blow_label",
+        "ding_flourish",
     ):
         w = page.findChild(QCheckBox, name)
         if w is not None:
@@ -813,7 +1129,8 @@ def read_settings_page(page: QWidget) -> dict:
         "size_outheal", "size_inheal", "size_outmiss", "size_inmiss",
         "dist_out", "dist_outns", "dist_pet", "dist_in", "dist_inns",
         "dist_outheal", "dist_inheal", "dist_outmiss", "dist_inmiss",
-        "big_threshold", "jitter_pct", "vspread_pct", "label_size",
+        "big_threshold", "jitter_pct", "vspread_pct", "label_size", "spread_deg",
+        "gravity_pct",
     ):
         w = page.findChild(QSpinBox, name)
         if w is not None:
@@ -827,7 +1144,7 @@ def read_settings_page(page: QWidget) -> dict:
     for name in (
         "color_out", "color_outns", "color_pet", "color_in", "color_inns",
         "color_outheal", "color_inheal", "color_outmiss", "color_inmiss",
-        "big_color",
+        "big_color", "ding_color",
     ):
         w = page.findChild(QPushButton, name)
         if w is not None and hasattr(w, "rgb"):
@@ -837,4 +1154,7 @@ def read_settings_page(page: QWidget) -> dict:
         w = page.findChild(QComboBox, name)
         if w is not None:
             out[name] = w.currentData()
+    mode = page.findChild(QComboBox, "size_mode")
+    if mode is not None:
+        out["size_mode"] = mode.currentData()
     return out

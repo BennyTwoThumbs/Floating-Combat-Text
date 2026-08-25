@@ -1,12 +1,46 @@
 # Changelog
 
-## 1.12.2
-- Fix: other players' damage could land in the pet lane. EQ's Complete Heal
-  message ("<name> beams a smile at <target>") is classified by the host as a
-  pet lifetap, so a cleric chain-healing in your group was being adopted as
-  your pet. Pet names are now taken only from lines that identify your own pet,
-  a directed "tells you, 'Attacking … Master.'" wins over broadcast lines, and
-  the pet is forgotten when it dies or is reclaimed.
+## 1.13.0
+- Numbers now fan out in a cone around their lane's direction instead of all
+  travelling the identical vector, and each one's travel distance varies a
+  little. New "Direction spread (°)" setting — 0 restores the old parallel
+  look. (Thanks to the user who pointed out it read too uniform.)
+- "Size by damage" is now a choice rather than a checkbox, with a new
+  **Relative to your typical hit** mode: a hit is sized against the median of
+  recent hits in the same lane, so a big hit reads big at level 10 and at 60,
+  and pet numbers are judged against other pet numbers. The old fixed curve is
+  still there as "By raw damage", and "All the same size" turns sizing off.
+  Existing installs with scaling on are migrated to the relative mode.
+- Fountain motion: a per-lane "Grav" tick makes gravity bend that lane's
+  numbers downward as they travel, turning the straight drift into an arc —
+  tossed up, over the top, and away. The strength is one "Gravity (%)" setting
+  under Motion. Off everywhere by default, so nothing moves differently until
+  you ask. Point a lane up, widen the spread, tick Grav, try about 120.
+- The big-hit flourish is now graduated instead of on/off: hits are graded
+  into three tiers and the glow thickens and brightens with each, so a good
+  hit gets a thin halo and a monster gets a fat one. In relative mode the
+  tiers grade against your own recent hits (1.6x, 2.6x, 4x the median), so
+  they keep meaning something as you level; otherwise they step off multiples
+  of the big-hit threshold. Heals are never graded.
+- "Ding!" flourish on level up: when the log says you have gained a level, a
+  big gold "Ding! N!" blooms out of the centre of the overlay and fades, with
+  a scatter of small ones thrown in every direction. It has no lane and no
+  ring — it borrows the whole overlay for about a second and a half. On by
+  default with its own colour, and deliberately not in the Test preview — it
+  should be a surprise when it happens.
+- Numbers now fade out as they approach the overlay edge instead of being
+  clipped mid-glyph — which gravity made routine, since numbers fall past the
+  bottom of the box.
+- Fix: setup mode could draw its rings while the overlay stayed deaf to the
+  mouse, so neither lanes nor the resize edges could be clicked. Click-through
+  becomes a native window style that Windows only reads when the window is
+  created, so toggling it on an already-visible overlay did nothing; the
+  window is now rebuilt in place (geometry preserved) when it changes.
+- The window's resize edges work again in setup mode: a band along each edge
+  is reserved for resizing, so the lane grab zones no longer swallow it.
+- The Test button now escalates every lane and primes the relative baseline,
+  so a test actually demonstrates the sizing instead of falling back to the
+  raw-damage curve.
 
 ## 1.12.2
 - Fix: other players' damage (and their pets') could land in your pet lane.

@@ -122,6 +122,17 @@ DEFAULTS: dict[str, Any] = {
     "dir_inns": "up",
     "dir_outheal": "down",
     "dir_inheal": "down",
+    # Which lanes gravity acts on. The strength is the global "gravity_pct";
+    # a lane with this off keeps the straight drift no matter the strength.
+    "gravity_out": False,
+    "gravity_outns": False,
+    "gravity_pet": False,
+    "gravity_in": False,
+    "gravity_inns": False,
+    "gravity_outheal": False,
+    "gravity_inheal": False,
+    "gravity_outmiss": False,
+    "gravity_inmiss": False,
     # big-hit ("crit") emphasis
     "big_threshold": 150,
     "big_scale": 1.35,
@@ -137,7 +148,16 @@ DEFAULTS: dict[str, Any] = {
     "dist_outmiss": 30,
     "dist_inmiss": 30,
     # motion & feel
-    "scale_with_damage": True,
+    # How wide a cone numbers travel in, around their lane's direction.
+    # 0 = every number moves in perfect parallel (the old look).
+    "spread_deg": 18,
+    # Downward pull applied over a number's life, as a fraction of the window.
+    # 0 = straight drift. Around 120 with an "up" direction and a wide spread
+    # gives the fountain look: tossed up, arcs over, falls away.
+    "gravity_pct": 0,
+    # "off" | "absolute" (fixed curve) | "relative" (vs your recent typical
+    # hit in that lane, so "big" reads big at any level or gear).
+    "size_mode": "relative",
     "lifetime_s": 1.5,
     "jitter_pct": 8,        # horizontal spread (% of window)
     "vspread_pct": 10,      # vertical spread (% of window) so stacked hits separate
@@ -151,6 +171,11 @@ DEFAULTS: dict[str, Any] = {
     # optional "Killing blow" label. Only your own (and your pet's) kills.
     "killing_blow": True,
     "killing_blow_label": True,
+    # Level-up celebration: a big "Ding! N!" blooming from the centre with a
+    # scatter of small ones. No lane, no ring — it owns the whole overlay for
+    # a second and a half.
+    "ding_flourish": True,
+    "ding_color": [255, 214, 84],
     "spawn_pop": True,      # numbers pop in (scale up then settle)
     "click_through": True,  # when NOT in setup mode, let clicks pass to the game
     # Miss/avoidance ticks get their own two lanes so they can be placed apart
@@ -174,7 +199,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.12.2",
+        version="1.13.0",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -322,6 +347,9 @@ class CombatTextPlugin(NParsePlugin):
         avoid_word = _re.compile(r"\b(dodge|parr|riposte|block|absorb)", _re.IGNORECASE)
         # e.g. "Forsure Scores a critical hit!(49)" / "You deliver a critical blast!(196)"
         # / "Forsure lands a Crippling Blow!(312)"
+        ding_re = _re.compile(
+            r"^You have gained a level!s*Welcome to level (?P<lvl>d+)!"
+        )
         crit_re = _re.compile(
             r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
             r"|delivers? a critical blast!|lands? a Crippling Blow!)"
@@ -331,6 +359,12 @@ class CombatTextPlugin(NParsePlugin):
 
         def on_line(ev: Any) -> None:
             msg = getattr(ev, "line", "") or ""
+            if "gained a level" in msg:
+                m = ding_re.match(msg)
+                if m:
+                    with self._lock:
+                        self._pending.append(("ding", m.group("lvl"), -2, ""))
+                return
             if "critical" in msg or "rippling" in msg:
                 m = crit_re.match(msg)
                 if m:
@@ -416,6 +450,9 @@ class CombatTextPlugin(NParsePlugin):
         avoid_word = re.compile(r"\b(dodge|parr|riposte|block|absorb)", re.IGNORECASE)
         slain_you = re.compile(r"^You have slain [\w` ]+")
         slain_by = re.compile(r"^[\w` ]+ (?:has|have) been slain by (?P<k>[\w` ]+)")
+        ding_re = re.compile(
+            r"^You have gained a level!s*Welcome to level (?P<lvl>d+)!"
+        )
         crit_re = re.compile(
             r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
             r"|delivers? a critical blast!|lands? a Crippling Blow!)"
@@ -443,6 +480,12 @@ class CombatTextPlugin(NParsePlugin):
                 if m:
                     self._record_slain(m.group("k"))
                     return
+            if "gained a level" in msg:
+                m = ding_re.match(msg)
+                if m:
+                    with self._lock:
+                        self._pending.append(("ding", m.group("lvl"), -2, ""))
+                return
             if "critical" in msg or "rippling" in msg:
                 m = crit_re.match(msg)
                 if m:
@@ -632,6 +675,14 @@ class CombatTextPlugin(NParsePlugin):
             for key, value in stored.items():
                 if key in self._settings:
                     self._settings[key] = value
+            # Migration: the scale_with_damage bool became size_mode. True maps
+            # to "relative" rather than "absolute" — it is the same intent
+            # (bigger hits look bigger) done in a way that keeps working as you
+            # level, which is the whole point of the setting.
+            if "size_mode" not in stored and "scale_with_damage" in stored:
+                self._settings["size_mode"] = (
+                    "relative" if stored.get("scale_with_damage") else "off"
+                )
             # Migration: setup_on_open used to default True; stores written
             # before auto_show existed carry that old default, not a choice.
             if "auto_show" not in stored:
@@ -692,6 +743,7 @@ class CombatTextPlugin(NParsePlugin):
             return False
         win.enter_setup_and_show()
         return True
+
 
     def reset_defaults(self) -> None:
         """Restore every setting to its default and refresh the overlay."""
