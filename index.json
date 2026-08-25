@@ -5,9 +5,9 @@
       "id": "floating-combat-text",
       "name": "Floating Combat Text",
       "latest": {
-        "version": "1.13.2",
-        "url": "https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/download/v1.13.2/floating-combat-text-1.13.2.zip",
-        "sha256": "67135a9224c58ceb4577b8eed3f1e0d3c4b595a37fb46faf4e05208ce0c109d3",
+        "version": "1.13.3",
+        "url": "https://github.com/BennyTwoThumbs/Floating-Combat-Text/releases/download/v1.13.3/floating-combat-text-1.13.3.zip",
+        "sha256": "8a60bea1b71baf5f8269dbbd096ef1cfae66e6ee7dd5e707d9f02655fe500abb",
         "requires_sdk": ">=1.0,<2"
       }
     }
