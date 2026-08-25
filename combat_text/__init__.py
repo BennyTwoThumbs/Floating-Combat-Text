@@ -20,9 +20,10 @@ What the Project 1999 log does and does not carry (so the numbers stay honest):
 * Incoming damage is captured for melee (``<mob> hits YOU ...``). Incoming
   spell nukes and DoT ticks are logged in a form the host does not turn into a
   damage event, so red numbers are essentially your melee mitigation view.
-* Pet hits are attributed only after the pet has identified itself to you at
-  least once this session (on summon, ``/pet attack``, ``/pet follow`` …).
-  Before that its name is unknown, so its hits are skipped rather than guessed.
+* Pet hits need your pet named by a line that proves it is yours: a directed
+  "tells you, 'Attacking … Master.'" (i.e. /pet attack) or "My leader is <you>"
+  (/pet leader). Broadcast pet chatter is ignored on purpose — a nearby
+  player's pet emits the same lines and would otherwise steal the pet lane.
 
 Threading, per the SDK contract: :meth:`activate` runs on the GUI thread; the
 event callbacks run on the log-driver thread and only ever append to a
@@ -173,7 +174,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.12.1",
+        version="1.12.2",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -262,10 +263,23 @@ class CombatTextPlugin(NParsePlugin):
             )
 
         def on_pet(ev: Any) -> None:
-            name = getattr(ev, "pet_name", "") or ""
-            if name:
+            raw = getattr(ev, "incident", "")
+            incident = str(getattr(raw, "name", raw) or "").upper()
+            name = (getattr(ev, "pet_name", "") or "").strip()
+            if any(k in incident for k in ("DEATH", "RECLAIM", "GETLOST")):
                 with self._lock:
-                    self._pet_name = name
+                    self._pet_name = ""
+                return
+            # ONLY "<pet> tells you, 'Attacking <target> Master.'" is addressed
+            # to you, so it is the one host pet event that names YOUR pet.
+            # Every other line the host reports — "At your service Master",
+            # "Following you, Master", "My leader is X", and the Complete Heal
+            # message "<name> beams a smile at <target>" — is broadcast, and a
+            # nearby player's pet (or cleric) emits it too. Trusting those put
+            # other people's damage in the pet lane.
+            if "PETATTACK" not in incident or not name:
+                return
+            self._set_pet(name, incident, ctx)
 
         ctx.subscribe(DamageEvent, on_damage)
         ctx.subscribe(PetEvent, on_pet)
@@ -299,6 +313,11 @@ class CombatTextPlugin(NParsePlugin):
         # Misses: the host publishes them as zero-damage events (no avoidance
         # word), so the word is read straight off the line instead.
         miss_out = _re.compile(r"^You try to \w+ [\w` ]+, but (?P<rest>.+)")
+        # "<pet> says 'My leader is <name>.'" — trustworthy only when the
+        # leader is you, which the host's PetEvent does not expose.
+        leader_re = _re.compile(
+            r"^(?P<p>[\w` ]+) says 'My leader is (?P<leader>[\w` ]+)\.'"
+        )
         miss_in = _re.compile(r"^[\w`'\-. ]+? tries to \w+ YOU, but (?P<rest>.+)")
         avoid_word = _re.compile(r"\b(dodge|parr|riposte|block|absorb)", _re.IGNORECASE)
         # e.g. "Forsure Scores a critical hit!(49)" / "You deliver a critical blast!(196)"
@@ -318,6 +337,14 @@ class CombatTextPlugin(NParsePlugin):
                     label = "Crippling Blow" if "rippling" in msg else ""
                     self._record_crit(m.group("n"), int(m.group("d")), label)
                     return
+            if "My leader is" in msg:
+                m = leader_re.match(msg)
+                if m:
+                    player = getattr(self._ctx, "player", None)
+                    me = (getattr(player, "name", "") or "").strip().lower()
+                    if me and m.group("leader").strip().lower() == me:
+                        self._set_pet(m.group("p").strip(), "leader line", ctx)
+                return
             if "non-melee" in msg:
                 m = self_ds.match(msg)
                 if m:
@@ -395,13 +422,13 @@ class CombatTextPlugin(NParsePlugin):
             r"\s*\((?P<d>\d+)\)",
             re.IGNORECASE,
         )
-        pet_id = re.compile(
-            r"^(?P<p>[\w` ]+) (?:tells you, 'Attacking"
-            r"|says 'At your service Master"
-            r"|says 'Following you, Master"
-            r"|says 'Guarding with my life"
-            r"|says 'Changing position, Master"
-            r"|says 'As you wish, oh great one)"
+        # Same rule as the typed path: only lines that prove the pet is yours.
+        pet_id = re.compile(r"^(?P<p>[\w` ]+) tells you, 'Attacking")
+        pet_leader = re.compile(
+            r"^(?P<p>[\w` ]+) says 'My leader is (?P<leader>[\w` ]+)\.'"
+        )
+        pet_gone = re.compile(
+            r"^(?P<p>[\w` ]+) (?:disperses|says 'Sorry to have failed you)"
         )
 
         def on_line(ev: Any) -> None:
@@ -424,8 +451,21 @@ class CombatTextPlugin(NParsePlugin):
                     return
             m = pet_id.match(msg)
             if m:
+                self._set_pet(m.group("p").strip(), "attack line", ctx)
+                return
+            if "My leader is" in msg:
+                m = pet_leader.match(msg)
+                if m:
+                    player = getattr(self._ctx, "player", None)
+                    me = (getattr(player, "name", "") or "").strip().lower()
+                    if me and m.group("leader").strip().lower() == me:
+                        self._set_pet(m.group("p").strip(), "leader line", ctx)
+                return
+            m = pet_gone.match(msg)
+            if m:
                 with self._lock:
-                    self._pet_name = m.group("p")
+                    if self._pet_name == m.group("p"):
+                        self._pet_name = ""
                 return
             m = self_ds.match(msg)
             if m:
@@ -526,6 +566,22 @@ class CombatTextPlugin(NParsePlugin):
                 return
             self._crits.append((amount, time.monotonic(), label))
 
+
+
+    def _set_pet(self, name: str, why: str, ctx: Any = None) -> None:
+        """Adopt ``name`` as your pet. Only called from lines that prove
+        ownership: a directed "tells you, 'Attacking … Master.'", or a
+        "My leader is <you>" whose leader is the logged-in character."""
+        player = getattr(self._ctx, "player", None)
+        me = (getattr(player, "name", "") or "").strip().lower()
+        if me and name.lower() == me:
+            return
+        with self._lock:
+            changed = self._pet_name != name
+            self._pet_name = name
+        log = getattr(ctx or self._ctx, "logger", None)
+        if changed and log is not None:
+            log.info("pet is now %r (%s)", name, why)
 
     def _record_slain(self, killer: str) -> None:
         """Queue a killing-blow marker for the lane that landed the kill.

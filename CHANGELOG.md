@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.12.2
+- Fix: other players' damage could land in the pet lane. EQ's Complete Heal
+  message ("<name> beams a smile at <target>") is classified by the host as a
+  pet lifetap, so a cleric chain-healing in your group was being adopted as
+  your pet. Pet names are now taken only from lines that identify your own pet,
+  a directed "tells you, 'Attacking … Master.'" wins over broadcast lines, and
+  the pet is forgotten when it dies or is reclaimed.
+
+## 1.12.2
+- Fix: other players' damage (and their pets') could land in your pet lane.
+  The host reports a pet event for broadcast chatter — "At your service
+  Master", "Following you, Master", "My leader is X", and EQ's Complete Heal
+  line "<name> beams a smile at <target>" — all of which a nearby player's pet
+  or cleric emits too, so whoever spoke last got adopted as your pet.
+  Your pet is now named only by lines that prove it is yours: a directed
+  "tells you, 'Attacking … Master.'" (/pet attack) or "My leader is <you>"
+  (/pet leader), and it is forgotten when the pet dies or is reclaimed.
+  Adoptions are logged to nparseplus.log if you ever need to check.
+
 ## 1.12.1
 - Releases now also attach a versionless `floating-combat-text.zip`, so
   `releases/latest/download/floating-combat-text.zip` is a permanent link to
