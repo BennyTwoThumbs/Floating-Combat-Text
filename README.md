@@ -15,13 +15,13 @@ It reads the EQ log file only — no memory reading, no injection — and it nev
 sends anything anywhere.
 
 ![The settings page: per-lane colours, sizes, directions, and travel](docs/FCTsettings.png)
-*Every lane has its own colour, size, drift direction, and travel distance.*
+*Every lane has its own colour, size, drift direction, gravity and travel distance, plus damage-relative sizing and the level-up flourish.*
 
 ![Setup mode: draggable lane rings over the game world](docs/FCToverlayplacement.png)
-*Setup mode — drag each lane's ring where you want its numbers; placements save automatically.*
+*Setup mode — drag each lane's ring where you want its numbers; the dashed band marks where the window resizes instead. Placements save automatically.*
 
 ![Live combat text: hits, crits, heals, pet damage, and misses](docs/FCTnumberstest.png)
-*In action — white hits with a glowing `312!` crit, green heals, orange pet damage, red incoming, and miss/riposte ticks.*
+*In action — a flaring killing blow, a Crippling Blow, numbers arcing under gravity, green heals, orange pet damage, red incoming, and miss/parry ticks.*
 
 ## Lanes
 
