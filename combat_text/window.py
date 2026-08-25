@@ -292,21 +292,27 @@ class CombatTextWindow(PluginWindow):
         want = (not self._setup) and bool(self._plugin.get("click_through"))
         if want == self._ct_applied:
             return
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, want)
         first = self._ct_applied is None
         self._ct_applied = want
-        # On Windows this attribute becomes the WS_EX_TRANSPARENT window style,
-        # which is only read when the native window is created. Flipping it on
-        # a window that is already on screen changes nothing until the native
-        # window is rebuilt — so setup mode would draw its rings while the
-        # overlay stayed deaf to the mouse. Bounce it, keeping geometry.
-        if not first and self.isVisible():
-            geo = self.geometry()
-            self.hide()
+        was_visible = self.isVisible()
+        geo = self.geometry()
+        # Two mechanisms, because one alone is not enough anywhere:
+        #
+        # * WindowTransparentForInput is the flag meant for a TOP-LEVEL window.
+        #   X11 and Wayland need it to clear the window's input region;
+        #   WA_TransparentForMouseEvents is aimed at child widgets and leaves a
+        #   Linux overlay swallowing clicks while looking invisible.
+        # * WA_TransparentForMouseEvents is what Windows turns into the
+        #   WS_EX_TRANSPARENT style.
+        #
+        # Both are read when the native window is created, and setWindowFlag
+        # hides the window besides — so a change only lands after a re-show.
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, want)
+        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, want)
+        if not first and was_visible:
             self.show()
             self.setGeometry(geo)
 
-    # --- animation loop ----------------------------------------------------
     def _on_frame(self) -> None:
         # Picks up live changes to the click_through setting and setup toggles.
         self._sync_click_through()

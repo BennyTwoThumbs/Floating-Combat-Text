@@ -199,7 +199,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.13.2",
+        version="1.13.3",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "

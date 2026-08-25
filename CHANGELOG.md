@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.13.3
+- Fix click-through on Linux: a locked overlay stayed invisible but still
+  swallowed clicks. Click-through was using WA_TransparentForMouseEvents,
+  which is aimed at child widgets — a top-level window needs the
+  Qt.WindowTransparentForInput flag for X11 and Wayland to clear its input
+  region. Both are now set, and the window is re-shown so the change lands.
+
 ## 1.13.2
 - Setup mode is much easier to aim at: the window border is drawn thick and
   bright (it is what you grab to resize), a dashed inner line now shows how
