@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.13.4
+- Fix the Ding! level-up flourish never firing: its detection regex was
+  missing the backslashes on `\s*` and `\d+` (written as bare `s*` and `d+`),
+  which cannot match real whitespace or digits — so the flourish was
+  effectively dead on every real level-up, in both the typed-event path and
+  the raw-line fallback.
+
 ## 1.13.3
 - Fix click-through on Linux: a locked overlay stayed invisible but still
   swallowed clicks. Click-through was using WA_TransparentForMouseEvents,

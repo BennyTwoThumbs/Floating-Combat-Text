@@ -199,7 +199,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.13.3",
+        version="1.13.4",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -348,7 +348,7 @@ class CombatTextPlugin(NParsePlugin):
         # e.g. "Forsure Scores a critical hit!(49)" / "You deliver a critical blast!(196)"
         # / "Forsure lands a Crippling Blow!(312)"
         ding_re = _re.compile(
-            r"^You have gained a level!s*Welcome to level (?P<lvl>d+)!"
+            r"^You have gained a level!\s*Welcome to level (?P<lvl>\d+)!"
         )
         crit_re = _re.compile(
             r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
@@ -451,7 +451,7 @@ class CombatTextPlugin(NParsePlugin):
         slain_you = re.compile(r"^You have slain [\w` ]+")
         slain_by = re.compile(r"^[\w` ]+ (?:has|have) been slain by (?P<k>[\w` ]+)")
         ding_re = re.compile(
-            r"^You have gained a level!s*Welcome to level (?P<lvl>d+)!"
+            r"^You have gained a level!\s*Welcome to level (?P<lvl>\d+)!"
         )
         crit_re = re.compile(
             r"^(?P<n>[\w`'\-. ]+?) (?:scores? a critical hit!"
