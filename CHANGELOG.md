@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.15.0
+- The direction spread is now per-lane. A new **Spread** checkbox next to each
+  lane's Grav box turns the cone on or off for that lane, so numbers can fan
+  out in one lane and travel dead straight in another. It is on for every lane
+  by default, matching the old behaviour; the "Direction spread (°)" slider is
+  still the shared angle for the lanes that have it ticked.
+
+## 1.14.0
+- The floating numbers can now use any installed font. New **Font** dropdown
+  and **Bold** toggle in the settings page apply to the numbers and their
+  labels. The default keeps the app font, so existing overlays look the same. A
+  font you pick has to be installed on any machine that loads the overlay, or
+  it falls back to the default.
+
 ## 1.13.4
 - Fix the Ding! level-up flourish never firing: its detection regex was
   missing the backslashes on `\s*` and `\d+` (written as bare `s*` and `d+`),

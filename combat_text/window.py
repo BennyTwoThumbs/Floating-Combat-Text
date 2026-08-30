@@ -399,7 +399,11 @@ class CombatTextWindow(PluginWindow):
         # Fan each number out within a cone around the lane's direction, and
         # vary its travel a little, so a burst reads as a spray rather than a
         # column of identical parallel numbers.
-        spread = math.radians(float(p.get("spread_deg") or 0))
+        spread = (
+            math.radians(float(p.get("spread_deg") or 0))
+            if p.get(f"spread_{kind}")
+            else 0.0
+        )
         if spread:
             angle = random.uniform(-spread, spread)
             cos_a, sin_a = math.cos(angle), math.sin(angle)
@@ -582,9 +586,7 @@ class CombatTextWindow(PluginWindow):
         grow = 1.0 - (1.0 - min(1.0, t / DING_GROW)) ** 3
         # Measure the text at a reference size, then scale so it spans the
         # window rather than assuming a multiple that may not fit.
-        probe = QFont()
-        probe.setPixelSize(100)
-        probe.setBold(True)
+        probe = self._number_font(100)
         painter.setFont(probe)
         advance = max(1, painter.fontMetrics().horizontalAdvance(ding.text))
         by_width = (w * DING_FILL_W) * 100.0 / advance
@@ -609,6 +611,17 @@ class CombatTextWindow(PluginWindow):
         )
 
 
+    def _number_font(self, size: int) -> QFont:
+        """A QFont for the floating numbers, honouring the chosen family and
+        bold toggle. An empty family keeps the app default."""
+        font = QFont()
+        family = str(self._plugin.get("font_family") or "")
+        if family:
+            font.setFamily(family)
+        font.setPixelSize(max(8, size))
+        font.setBold(bool(self._plugin.get("font_bold")))
+        return font
+
     def _draw_number(
         self,
         painter: QPainter,
@@ -621,9 +634,7 @@ class CombatTextWindow(PluginWindow):
         tier: int = 0,
         big_color: tuple[int, int, int] = (255, 140, 0),
     ) -> None:
-        font = QFont()
-        font.setPixelSize(max(8, size))
-        font.setBold(True)
+        font = self._number_font(size)
         painter.setFont(font)
         tw = painter.fontMetrics().horizontalAdvance(text)
         x = int(cx - tw / 2)
@@ -875,6 +886,25 @@ def _dspin(name: str, lo: float, hi: float, step: float, value: float, parent: Q
     return box
 
 
+def _family_combo(name: str, value: str, parent: QWidget) -> QComboBox:
+    """A dropdown of every installed font family, plus a "default" entry that
+    keeps the app font. Item data is the family string ("" for default)."""
+    combo = QComboBox(parent)
+    combo.setObjectName(name)
+    combo.addItem("Default (nParse+ font)", "")
+    try:
+        from PySide6.QtGui import QFontDatabase
+
+        families = list(QFontDatabase.families())
+    except Exception:  # noqa: BLE001 - font list is best-effort
+        families = []
+    for fam in families:
+        combo.addItem(fam, fam)
+    idx = combo.findData(value)
+    combo.setCurrentIndex(idx if idx >= 0 else 0)
+    return combo
+
+
 def _dir_combo(name: str, value: str, parent: QWidget) -> QComboBox:
     combo = QComboBox(parent)
     combo.setObjectName(name)
@@ -1025,7 +1055,7 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     grid.setHorizontalSpacing(14)
     grid.setVerticalSpacing(10)
     grid.setColumnStretch(4, 1)
-    for col, head in enumerate(("", "On", "Colour", "Size", "Move", "Grav", "Travel %")):
+    for col, head in enumerate(("", "On", "Colour", "Size", "Move", "Grav", "Spread", "Travel %")):
         grid.addWidget(QLabel(head, lanes), 0, col)
     for row, kind in enumerate(LANE_KINDS, start=1):
         grid.addWidget(QLabel(LANE_ROW_LABELS[kind], lanes), row, 0)
@@ -1047,8 +1077,16 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         grav.setChecked(bool(values.get(f"gravity_{kind}", False)))
         grav.setToolTip("Let gravity arc this lane's numbers downward.")
         grid.addWidget(grav, row, 5)
+        spread = QCheckBox(lanes)
+        spread.setObjectName(f"spread_{kind}")
+        spread.setChecked(bool(values.get(f"spread_{kind}", True)))
+        spread.setToolTip(
+            "Fan this lane's numbers out in a cone. Untick to send them straight "
+            "along the Move direction. The angle is the global Direction spread below."
+        )
+        grid.addWidget(spread, row, 6)
         grid.addWidget(
-            _spin(f"dist_{kind}", 0, 100, int(values.get(f"dist_{kind}", 42)), lanes), row, 6
+            _spin(f"dist_{kind}", 0, 100, int(values.get(f"dist_{kind}", 42)), lanes), row, 7
         )
     hint = QLabel(
         "“Move” is the direction numbers drift; “Travel” is how far (percent "
@@ -1057,7 +1095,7 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
         lanes,
     )
     hint.setWordWrap(True)
-    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 7)
+    grid.addWidget(hint, len(LANE_KINDS) + 1, 0, 1, 8)
     root.addWidget(lanes)
 
     # --- Big hits ----------------------------------------------------------
@@ -1085,9 +1123,12 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     idx = size_mode.findData(str(values.get("size_mode", "relative")))
     size_mode.setCurrentIndex(idx if idx >= 0 else 0)
     mform.addRow("Size by damage", size_mode)
-    mform.addRow(
-        "Direction spread (°)", _spin("spread_deg", 0, 90, int(values.get("spread_deg", 18)), motion)
+    spread_spin = _spin("spread_deg", 0, 90, int(values.get("spread_deg", 18)), motion)
+    spread_spin.setToolTip(
+        "The cone angle, for the lanes with Spread ticked above. 0 sends every "
+        "number straight along its lane direction."
     )
+    mform.addRow("Direction spread (°)", spread_spin)
     mform.addRow(
         "Gravity (%)", _spin("gravity_pct", 0, 300, int(values.get("gravity_pct", 0)), motion)
     )
@@ -1145,6 +1186,26 @@ def build_settings_page(parent: QWidget | None, values: dict, plugin: Any = None
     mform.addRow(setup)
     root.addWidget(motion)
 
+    # --- Font --------------------------------------------------------------
+    fontbox = QGroupBox("Font", page)
+    fform = QFormLayout(fontbox)
+    fform.addRow(
+        "Number font", _family_combo("font_family", str(values.get("font_family", "")), fontbox)
+    )
+    bold = QCheckBox("Bold", fontbox)
+    bold.setObjectName("font_bold")
+    bold.setChecked(bool(values.get("font_bold", True)))
+    fform.addRow(bold)
+    fnote = QLabel(
+        "Applies to the floating numbers and their labels. A font you pick has "
+        "to be installed on any machine that loads this overlay, or it falls "
+        "back to the default.",
+        fontbox,
+    )
+    fnote.setWordWrap(True)
+    fform.addRow(fnote)
+    root.addWidget(fontbox)
+
     root.addStretch(1)
     return page
 
@@ -1156,9 +1217,11 @@ def read_settings_page(page: QWidget) -> dict:
         "enabled_outheal", "enabled_inheal", "enabled_outmiss", "enabled_inmiss",
         "gravity_out", "gravity_outns", "gravity_pet", "gravity_in", "gravity_inns",
         "gravity_outheal", "gravity_inheal", "gravity_outmiss", "gravity_inmiss",
+        "spread_out", "spread_outns", "spread_pet", "spread_in", "spread_inns",
+        "spread_outheal", "spread_inheal", "spread_outmiss", "spread_inmiss",
         "spawn_pop", "click_through", "setup_on_open",
         "auto_show", "show_special_labels", "killing_blow", "killing_blow_label",
-        "ding_flourish",
+        "ding_flourish", "font_bold",
     ):
         w = page.findChild(QCheckBox, name)
         if w is not None:
@@ -1196,4 +1259,7 @@ def read_settings_page(page: QWidget) -> dict:
     mode = page.findChild(QComboBox, "size_mode")
     if mode is not None:
         out["size_mode"] = mode.currentData()
+    fam = page.findChild(QComboBox, "font_family")
+    if fam is not None:
+        out["font_family"] = fam.currentData()
     return out

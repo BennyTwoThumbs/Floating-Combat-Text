@@ -133,6 +133,18 @@ DEFAULTS: dict[str, Any] = {
     "gravity_inheal": False,
     "gravity_outmiss": False,
     "gravity_inmiss": False,
+    # Which lanes fan their numbers out in a cone (the angle is spread_deg).
+    # On for every lane by default, matching the old global behaviour; untick a
+    # lane to send its numbers straight along its direction instead.
+    "spread_out": True,
+    "spread_outns": True,
+    "spread_pet": True,
+    "spread_in": True,
+    "spread_inns": True,
+    "spread_outheal": True,
+    "spread_inheal": True,
+    "spread_outmiss": True,
+    "spread_inmiss": True,
     # big-hit ("crit") emphasis
     "big_threshold": 150,
     "big_scale": 1.35,
@@ -177,6 +189,10 @@ DEFAULTS: dict[str, Any] = {
     "ding_flourish": True,
     "ding_color": [255, 214, 84],
     "spawn_pop": True,      # numbers pop in (scale up then settle)
+    # Font for the floating numbers and their labels. Empty = the app default;
+    # otherwise an installed family name. Bold on by default (the old look).
+    "font_family": "",
+    "font_bold": True,
     "click_through": True,  # when NOT in setup mode, let clicks pass to the game
     # Miss/avoidance ticks get their own two lanes so they can be placed apart
     # from the damage numbers. Off by default: chatter some people won't want.
@@ -199,7 +215,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.13.4",
+        version="1.15.0",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
