@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.15.1
+- Fix other players' pets and charmed mobs leaking into the pet lane. The pet
+  name now clears when your charm breaks ("Your charm spell has worn off."),
+  when you zone, and when you die, matching what the host's own pet tracking
+  does. Before, a charmed name stuck around after the charm ended, so any
+  same-named creature after it — a repop, or another charmer's pet of the same
+  NPC — kept being counted as yours. Two live pets sharing one name still can't
+  be told apart by name alone.
+
 ## 1.15.0
 - The direction spread is now per-lane. A new **Spread** checkbox next to each
   lane's Grav box turns the cone on or off for that lane, so numbers can fan

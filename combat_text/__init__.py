@@ -215,7 +215,7 @@ class CombatTextPlugin(NParsePlugin):
     meta = PluginMeta(
         id="floating-combat-text",
         name="Floating Combat Text",
-        version="1.15.0",
+        version="1.15.1",
         description=(
             "MMO-style floating combat text for nParse+: your hits, pet, "
             "incoming, non-melee / damage-shields, and healing as colour-coded "
@@ -326,6 +326,9 @@ class CombatTextPlugin(NParsePlugin):
         ctx.subscribe(PetEvent, on_pet)
 
         def on_slain(ev: Any) -> None:
+            # Your own death loses the pet (host's PetHandler resets on it too).
+            if (getattr(ev, "victim", "") or "").strip().lower() == "you":
+                self._clear_pet("you died")
             self._record_slain(getattr(ev, "killer", ""))
 
         ctx.subscribe(SlainEvent, on_slain)
@@ -375,6 +378,15 @@ class CombatTextPlugin(NParsePlugin):
 
         def on_line(ev: Any) -> None:
             msg = getattr(ev, "line", "") or ""
+            # A charm break or a zone loses the pet, exactly as the host's own
+            # PetHandler resets on these. Without it the last charmed name sticks
+            # and same-named creatures keep feeding the pet lane.
+            if msg == "Your charm spell has worn off.":
+                self._clear_pet("charm worn off")
+                return
+            if msg.startswith("You have entered ") or msg.startswith("LOADING, PLEASE WAIT"):
+                self._clear_pet("zoned")
+                return
             if "gained a level" in msg:
                 m = ding_re.match(msg)
                 if m:
@@ -487,6 +499,12 @@ class CombatTextPlugin(NParsePlugin):
         def on_line(ev: Any) -> None:
             msg = getattr(ev, "line", "") or ""
             if not msg:
+                return
+            if msg == "Your charm spell has worn off.":
+                self._clear_pet("charm worn off")
+                return
+            if msg.startswith("You have entered ") or msg.startswith("LOADING, PLEASE WAIT"):
+                self._clear_pet("zoned")
                 return
             if "slain" in msg:
                 if slain_you.match(msg):
@@ -641,6 +659,18 @@ class CombatTextPlugin(NParsePlugin):
         log = getattr(ctx or self._ctx, "logger", None)
         if changed and log is not None:
             log.info("pet is now %r (%s)", name, why)
+
+    def _clear_pet(self, why: str) -> None:
+        """Drop the current pet name. Called when the host would lose the pet:
+        a charm break, a zone, or your own death. Without this the last charmed
+        name lingers, and every same-named creature (a repop, another player's
+        charm of the same NPC) keeps landing in the pet lane."""
+        with self._lock:
+            had = self._pet_name
+            self._pet_name = ""
+        log = getattr(self._ctx, "logger", None)
+        if had and log is not None:
+            log.info("pet cleared (%s)", why)
 
     def _record_slain(self, killer: str) -> None:
         """Queue a killing-blow marker for the lane that landed the kill.
